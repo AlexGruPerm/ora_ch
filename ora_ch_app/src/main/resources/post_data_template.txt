@@ -1,0 +1,79 @@
+{
+ "servers":{
+   "oracle":{
+     "ip" : "192.168.1.1",
+     "port": 1521,
+     "tnsname" : "test",
+     "fetch_size" : 1000,
+     "user" : "dbadmin",
+     "password" : "dbadmin"
+   },
+   "clickhouse":{
+     "ip": "192.168.1.2",
+     "port": 8123,
+     "batch_size" : 2000,
+     "user" : "admin",
+     "password" : "admin"
+   },
+   "config":{
+     "mode":"sequentially",
+     "mode2":"parallel",
+     "degree": 2
+   }
+ },
+   "schemas":[
+     {"schema":"msk_arm_v2",
+     "tables":[
+       {"name":"eaist_lot"},
+       {"name":"eaist_contract"},
+       {"name":"eaist_financeplan"}
+     ]
+     },
+     {"schema":"msk_nsi",
+     "tables":[
+       {"name":"d_oiv"},
+       {"name":"d_oiv_type"},
+       {"name":"d_okrug"}
+     ]
+     }
+   ]
+}
+
+   "tables":[
+       {"schema":"msk_arm_v2","name":"eaist_lot"},
+       {"schema":"msk_arm_v2","name":"eaist_contract"},
+       {"schema":"msk_arm_v2","name":"eaist_financeplan"},
+       {"schema":"msk_nsi","name":"d_oiv"},
+       {"schema":"msk_nsi","name":"d_oiv_type"},
+       {"schema":"msk_nsi","name":"d_okrug"}
+     ]
+
+
+clear;
+
+drop table ora_to_ch_tasks;
+drop sequence s_ora_to_ch_tasks;
+
+create sequence s_ora_to_ch_tasks
+minvalue 1
+maxvalue 9999999999999999999999999999
+start with 1
+increment by 1
+nocache;
+
+create table ora_to_ch_tasks(
+ id integer not null
+);
+
+select s.sid,s.PROGRAM,s.MODULE,s.ACTION
+from v$session s
+where s.OSUSER='yakushev' and
+      s.MODULE='ORATOCH'
+
+
+
+
+
+
+
+

@@ -1,7 +1,7 @@
 name := "ora_ch_app"
 
 ThisBuild / organization := "yakushev"
-ThisBuild / version      := "0.0.2"
+ThisBuild / version      := "0.0.4"
 ThisBuild / scalaVersion := "2.13.10"
 
   val Versions = new {
@@ -9,7 +9,10 @@ ThisBuild / scalaVersion := "2.13.10"
     val slf4jApi       = "2.0.9"
     val log4jVers      = "2.0.9"
     val lz4Vers        = "1.8.0"
-    val dbcp2Vers      = "2.9.0"
+    val zio            = "2.0.20"
+    val zio_config     = "4.0.0-RC16"
+    val zio_http       = "3.0.0-RC4"
+    val zio_json       = "0.6.2"
   }
 
   // PROJECTS
@@ -24,7 +27,7 @@ ThisBuild / scalaVersion := "2.13.10"
   lazy val ora_ch_app = (project in file("ora_ch_app"))
   .settings(
     Compile / mainClass        := Some("app.MainApp"),
-    assembly / assemblyJarName := "ora_ch_app.jar",
+    assembly / assemblyJarName := s"ora_to_clickhouse_$version.jar",
     name := "ora_ch_app",
     commonSettings,
     libraryDependencies ++= commonDependencies
@@ -32,17 +35,23 @@ ThisBuild / scalaVersion := "2.13.10"
 
   lazy val dependencies =
     new {
-      val ch      = "com.clickhouse" % "clickhouse-jdbc"   % Versions.clickhouseJdbc
-      val slf4j   = "org.slf4j" % "slf4j-api"              % Versions.slf4jApi
-      val log4j   = "org.slf4j" % "slf4j-log4j12"          % Versions.log4jVers
-      val lz4     = "org.lz4" % "lz4-java"                 % Versions.lz4Vers
-      val dbcp2   = "org.apache.commons" % "commons-dbcp2" % Versions.dbcp2Vers
- 
+      val ch                = "com.clickhouse" % "clickhouse-jdbc" % Versions.clickhouseJdbc
+      val slf4j             = "org.slf4j" % "slf4j-api" % Versions.slf4jApi
+      val log4j             = "org.slf4j" % "slf4j-log4j12" % Versions.log4jVers
+      val lz4               = "org.lz4" % "lz4-java" % Versions.lz4Vers
+      val zio               = "dev.zio" %% "zio" % Versions.zio
+      val zio_conf          = "dev.zio" %% "zio-config" % Versions.zio_config
+      val zio_conf_typesafe = "dev.zio" %% "zio-config-typesafe" % Versions.zio_config
+      val zio_conf_magnolia = "dev.zio" %% "zio-config-magnolia" % Versions.zio_config
+      val zio_http          = "dev.zio" %% "zio-http" % Versions.zio_http
+      val zio_json          = "dev.zio" %% "zio-json" % Versions.zio_json
+
+      val zioDep = List(zio, zio_conf, zio_conf_typesafe, zio_conf_magnolia, zio_http, zio_json)
       val chDep = List(ch, slf4j, log4j, lz4)
     }
 
   val commonDependencies = {
-    dependencies.chDep
+    dependencies.zioDep ++ dependencies.chDep
   }
 
   lazy val compilerOptions = Seq(

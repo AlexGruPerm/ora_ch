@@ -1,0 +1,18 @@
+drop table data.eaist_lot;
+
+create table data.eaist_lot
+(
+   id             UInt64,
+   registrynumber FixedString(19),
+   tendersubject  FixedString(2048),
+   lotnumber      Decimal64(6),
+   publicdate     Nullable(DateTime),
+   lotprice       Decimal64(6),
+   finishdate     Nullable(DateTime),
+   update_time    Nullable(DateTime),
+   membercount    Decimal64(6),
+
+)ENGINE = MergeTree()
+PRIMARY KEY (id);
+
+
