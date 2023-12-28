@@ -9,5 +9,5 @@ case class OraServer(
                       password: String
                     ){
   def getUrl(): String =
-    s"jdbc:oracle:thin:@//${ip}:${port}/${tnsname}"
+    s"jdbc:oracle:thin:@//$ip:$port/$tnsname"
 }

@@ -1,7 +1,3 @@
-
-
-
-
 {
  "servers":{
    "oracle":{
@@ -13,8 +9,9 @@
      "password" : "dbadmin"
    },
    "clickhouse":{
-     "ip": "192.168.1.2",
+     "ip": "192.168.56.100",
      "port": 8123,
+     "db" : "default",
      "batch_size" : 2000,
      "user" : "admin",
      "password" : "admin"

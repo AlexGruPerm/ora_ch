@@ -1,11 +1,12 @@
 package server
 
 
+import clickhouse.{jdbcChSession, jdbcChSessionImpl}
 import conf.OraServer
 import error.ResponseMessage
 import ora.{jdbcSession, jdbcSessionImpl}
 import request.{ReqNewTask, SrcTable}
-import task.{ImplTaskRepo, Ready, TaskState, Wait, WsTask}
+import task.{Executing, ImplTaskRepo, Ready, TaskState, Wait, WsTask}
 import zio.{ZIO, _}
 import zio.http.{handler, _}
 import zio.json.{DecoderOps, EncoderOps}
@@ -32,8 +33,19 @@ object WServer {
   } yield wstask
 
 
-  private def startTask(wstask: WsTask) : ZIO[ImplTaskRepo with OraServer with jdbcSession, Throwable, Unit] = for {
-    _ <- ZIO.logInfo(s" ~~~~~~~~~~ startTask [${wstask.id}] ~~~~~~~~~~~~ ")
+  private def startTask(wstask: WsTask) : ZIO[ImplTaskRepo with OraServer with jdbcSession with jdbcChSession, Throwable, Unit] = for {
+    repo <- ZIO.service[ImplTaskRepo]
+    stateBefore <- repo.getState()
+    _ <- repo.setState(TaskState(Executing))
+    stateAfter <- repo.getState()
+    _ <- ZIO.logInfo(s" [startTask] [${wstask.id}] State: ${stateBefore} -> ${stateAfter} ")
+    jdbc <- ZIO.service[jdbcSession] //todo: don't call it, new session
+    sess <- jdbc.sess
+    _ <- ZIO.logInfo(s"[startTask] Oracle session taskId = ${sess.taskId}")
+    jdbcCh <- ZIO.service[jdbcChSession]
+    sessCh <- jdbcCh.sess(sess.taskId)
+    _ <- ZIO.logInfo(s"[startTask] Clickhouse session taskId = ${sessCh.taskId}")
+
   } yield ()
 
   private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
@@ -62,7 +74,9 @@ object WServer {
           tr <- ZIO.service[ImplTaskRepo]
           _ <- startTask(wstask).provide(ZLayer.succeed(tr),
                                    ZLayer.succeed(newTask.servers.oracle),
-                                   jdbcSessionImpl.layer).forkDaemon
+                                   jdbcSessionImpl.layer,
+                                   ZLayer.succeed(newTask.servers.clickhouse),
+                                   jdbcChSessionImpl.layer).forkDaemon
           //_ <- fiber.join
           //todo: RUN PROCESS of coping data here and fork task in separate fiber
         } yield Response.json(s"""{"taskid": "${wstask.id}"}""").status(Status.Ok)
