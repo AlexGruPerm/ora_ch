@@ -5,14 +5,14 @@ import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
 case class OneTable(name: String)
 
-case class SrcTable(schema: String, tables: Option[List[OneTable]])
+case class SrcTable(schema: String, tables: List[OneTable] = List.empty[OneTable])
 
 case class Servers(oracle: OraServer,
                    clickhouse: ClickhouseServer,
                    config : Mode = Mode()
                   )
 
-case class ReqNewTask(servers: Servers, schemas: Option[List[SrcTable]])
+case class ReqNewTask(servers: Servers, schemas: List[SrcTable] = List.empty[SrcTable])
 
 object EncDecReqNewTaskImplicits{
 

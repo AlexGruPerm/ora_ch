@@ -21,9 +21,9 @@ case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
 
 }
 
-object ImplTestsRepo {
+object ImplTaskRepo {
   def layer: ZLayer[Any, Nothing, ImplTaskRepo] =
     ZLayer.fromZIO(
-      Ref.make(WsTask()).map(ImplTaskRepo)
+      Ref.make(WsTask()).map(r => ImplTaskRepo(r))
     )
 }

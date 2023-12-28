@@ -4,62 +4,39 @@ package server
 import conf.OraServer
 import error.ResponseMessage
 import ora.{jdbcSession, jdbcSessionImpl}
-import request.ReqNewTask
-import task.{Ready, TaskState, WsTask}
+import request.{ReqNewTask, SrcTable}
+import task.{ImplTaskRepo, Ready, TaskState, Wait, WsTask}
 import zio.{ZIO, _}
 import zio.http.{handler, _}
 import zio.json.{DecoderOps, EncoderOps}
 import request.EncDecReqNewTaskImplicits._
-import server.WServer.createWsTask
 import table.Table
 
 import java.io.IOException
+import scala.collection.immutable.List
 
 object WServer {
 
-  /*
-  id :Int = 0,
-  state: TaskState = TaskState(Wait,Option.empty[Table]),
-  oraServer: Option[OraServer] = Option.empty[OraServer],
-  clickhouseServer: Option[ClickhouseServer] = Option.empty[ClickhouseServer],
-  mode : Mode = Mode(),
-  tables: List[Table] = List.empty[Table]
-  */
-
-  private def getTableWithInfo(/*schema: String, tableName: String*/): ZIO[OraServer with jdbcSession, Exception, Unit] = for {
+  private def createWsTask(newTask: Task[ReqNewTask]):  ZIO[OraServer with jdbcSession, Throwable, WsTask] = for {
     jdbc <- ZIO.service[jdbcSession]
-    conn <- jdbc.pgConnection()
-    x <- conn.sess.
+    sess <- jdbc.sess
+    taskId <- sess.getTaskIdFromSess
+    newtask <- newTask
+    t <- sess.getTables(newtask.schemas)
+    wstask = WsTask(id = taskId,
+      state = TaskState(Ready, Option.empty[Table]),
+      oraServer = Some(newtask.servers.oracle),
+      clickhouseServer = Some(newtask.servers.clickhouse),
+      mode = newtask.servers.config,
+      tables = t)
+  } yield wstask
+
+
+  private def startTask(wstask: WsTask) : ZIO[ImplTaskRepo with OraServer with jdbcSession, Throwable, Unit] = for {
+    _ <- ZIO.logInfo(s" ~~~~~~~~~~ startTask [${wstask.id}] ~~~~~~~~~~~~ ")
   } yield ()
 
-  private def createWsTask(newTask: Task[ReqNewTask]):  ZIO[Any, Throwable, Int/*WsTask*/] = for {
-/*    WsTask(id = 123456,
-           state = TaskState(Ready,Option.empty[Table]),
-           oraServer = newTask.servers.oracle,
-           clickhouseServer = newTask.servers.clickhouse,
-           mode = newTask.servers.config,
-           tables =
-             newTask.schemas.map{sch =>
-               sch.map{stbls =>
-                 stbls.tables.map{tbls => tbls.map{t =>
-
-                   Table(stbls.schema,t.name)
-                  }
-                 }
-               }
-             }
-          )*/
-    newtask <- newTask
-/*    newtaskSchemas <- newtask.schemas
-    schemas <- newtaskSchemas
-    tables <- schemas.tables
-    table <- tables*/
-    _ <- getTableWithInfo(/*schemas.schema*//*table.name*/).provide(ZLayer.succeed(newtask.servers.oracle), jdbcSessionImpl.layer)
-    //wstask = WsTask(???)
-    taskId <- ZIO.succeed(123456)
-  } yield taskId/*wstask*/
-
-  private def task(req: Request): ZIO[Any, Throwable, Response] = for {
+  private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
     bodyText <- req.body.asString
      _ <- ZIO.logInfo(s"task body = $bodyText")
 
@@ -80,20 +57,21 @@ object WServer {
     resp <- u match {
       case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
       case Right(newTask) =>
-        //getMainPage // call method here and fork
         for {
-          taskId <- createWsTask(ZIO.succeed(newTask))
+          wstask <- createWsTask(ZIO.succeed(newTask)).provide(ZLayer.succeed(newTask.servers.oracle), jdbcSessionImpl.layer)
+          tr <- ZIO.service[ImplTaskRepo]
+          _ <- startTask(wstask).provide(ZLayer.succeed(tr),
+                                   ZLayer.succeed(newTask.servers.oracle),
+                                   jdbcSessionImpl.layer).forkDaemon
+          //_ <- fiber.join
           //todo: RUN PROCESS of coping data here and fork task in separate fiber
-        } yield Response.json(s"""{"taskid": "${taskId}"}""").status(Status.Ok)
-
+        } yield Response.json(s"""{"taskid": "${wstask.id}"}""").status(Status.Ok)
 /*        .foldZIO(
           error => ZIO.logError(s"oratoch-3 error parsing input file with task : ${error.getMessage}") *>
             ZioResponseMsgBadRequest(error.getMessage),
           success => ZIO.succeed(success)
         )*/
-
     }
-
      // resp =  Response.html(s"HTML: $bodyText", Status.Ok)
   } yield resp
 
