@@ -11,9 +11,146 @@ import java.util.Properties
 
 case class oraSess(sess : Connection, taskId: Int){
 
+  def getDataResultSet(table: Table, fetch_size: Int): ZIO[Any, Exception, ResultSet] = for {
+    _ <- ZIO.unit
+    rsEffect = ZIO.attemptBlocking {
+      val dataQuery =
+        table.keyType match {
+          case PrimaryKey | UniqueKey => s"select * from ${table.schema}.${table.name}" //todo: REMOVE where rownum <= 3000
+          case RnKey => s"select row_number() over(order by null) as rn,t.* from ${table.schema}.${table.name} t" //todo: REMOVE where rownum <= 3000
+        }
+      val dataRs = sess.createStatement.executeQuery(dataQuery)
+      dataRs.setFetchSize(fetch_size)
+      dataRs
+    }.catchAll {
+      case e: Exception => ZIO.logError(e.getMessage) *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+    rs <- rsEffect
+  } yield rs
+
+
+  def saveTableList(tables: List[Table]): ZIO[Any,Exception,Unit] = for {
+    taskId <- getTaskIdFromSess
+    saveTablesEffects = tables.map{t =>
+      ZIO.attemptBlocking {
+        val query: String =
+          s"insert into ora_to_ch_tasks_tables(id_task,schema_name,table_name) values($taskId,'${t.schema}','${t.name}') "
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        rs.next()
+      }.catchAll {
+        case e: Exception => ZIO.logError(e.getMessage) *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+    }
+    _ <- ZIO.collectAll(saveTablesEffects)
+  } yield ()
+
+  def setTaskState(state: String): ZIO[Any, Exception, Unit] = for {
+    taskId <- getTaskIdFromSess
+    _ <-
+      ZIO.attemptBlocking {
+        val query: String =
+          s"update ora_to_ch_tasks set state='$state' where id=$taskId"
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        rs.next()
+      }.catchAll {
+        case e: Exception => ZIO.logError(e.getMessage) *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+  } yield ()
+
+  def setTableBeginCopy(table: Table): ZIO[Any, Exception, Unit] = for {
+    taskId <- getTaskIdFromSess
+    _ <-
+      ZIO.attemptBlocking {
+        val query: String =
+          s""" update ora_to_ch_tasks_tables t
+             |   set  begin_datetime = sysdate,
+             |        state  = 'copying'
+             | where t.id_task=$taskId and
+             |       t.schema_name='${table.schema}' and
+             |       t.table_name='${table.name}' """.stripMargin
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        rs.next()
+      }.catchAll {
+        case e: Exception => ZIO.logError(e.getMessage) *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+  } yield ()
+
+  def updateCountCopiedRows(table: Table, rowCount: Int): ZIO[Any, Nothing, Unit] = for {
+    taskId <- getTaskIdFromSess.catchAll {
+      _: Exception => ZIO.succeed(0)
+    }
+    _ <-
+      ZIO.attemptBlocking {
+        val query: String =
+          s""" update ora_to_ch_tasks_tables t
+             |   set copied_records_count = $rowCount,
+             |             speed_rows_sec = (case
+             |                                when ((sysdate - t.begin_datetime)*24*60*60) != 0
+             |                                then round($rowCount/((sysdate - t.begin_datetime)*24*60*60))
+             |                                else $rowCount
+             |                               end)
+             | where t.id_task     = $taskId and
+             |       t.schema_name = '${table.schema}' and
+             |       t.table_name  = '${table.name}' """.stripMargin
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        rs.next()
+        }.catchAllDefect {
+           case e: Exception => ZIO.logError(s"No problem. updateCountCopiedRows - Defect - ${e.getMessage}")
+        }
+        .catchAll {
+          case e: Exception =>ZIO.logError(s"No problem. updateCountCopiedRows - Defect - ${e.getMessage}")
+        }
+  } yield ()
+
+  def setTableCopied(table: Table, rowCount: Int): ZIO[Any, Exception, Unit] = for {
+    taskId <- getTaskIdFromSess
+    _ <-
+      ZIO.attemptBlocking {
+        val query: String =
+          s""" update ora_to_ch_tasks_tables t
+             |   set end_datetime = sysdate,
+             |             state  = 'finished',
+             |             copied_records_count = $rowCount,
+             |             speed_rows_sec = (case
+             |                                when ((sysdate - t.begin_datetime)*24*60*60) != 0
+             |                                then round($rowCount/((sysdate - t.begin_datetime)*24*60*60))
+             |                                else $rowCount
+             |                               end)
+             | where t.id_task     = $taskId and
+             |       t.schema_name = '${table.schema}' and
+             |       t.table_name  = '${table.name}' """.stripMargin
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        rs.next()
+      }.catchAll {
+        case e: Exception => ZIO.logError(e.getMessage) *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+  } yield ()
+
+
+
+  def taskFinished: ZIO[Any, Exception, Unit] = for {
+    taskId <- getTaskIdFromSess
+    _ <-
+      ZIO.attemptBlocking {
+        val query: String =
+          s"update ora_to_ch_tasks set end_datetime = sysdate,state='finished' where id=$taskId"
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        rs.next()
+      }.catchAll {
+        case e: Exception => ZIO.logError(e.getMessage) *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+  } yield ()
+
   def getPid: Int = {
     val stmt: Statement = sess.createStatement
-    val rs: ResultSet = stmt.executeQuery("select distinct sid from v$mystat")
+    val rs: ResultSet = stmt.executeQuery("select sys_context('USERENV','SID') as sid from dual")
+    /*"select distinct sid from v$mystat"*/
     rs.next()
     val pg_backend_pid: Int = rs.getInt("sid")
     pg_backend_pid
@@ -21,7 +158,6 @@ case class oraSess(sess : Connection, taskId: Int){
 
   def getKeyType(schema: String, tableName: String): ZIO[Any,Exception,(KeyType,String)] = for {
     _ <- ZIO.unit
-    //todo: make single big query for oracle to get KeyType and KeyColumns
     keysEffect = ZIO.attemptBlocking {
       val query: String =
         s"""
@@ -133,7 +269,8 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
         val conn = DriverManager.getConnection(ora.getUrl(), props)
         conn.setAutoCommit(true)
         conn.setClientInfo("OCSID.MODULE", "ORATOCH")
-        val query: String = "insert into ora_to_ch_tasks (id) values (s_ora_to_ch_tasks.nextval)"
+        val query: String = "insert into ora_to_ch_tasks (id,ora_sid) values (s_ora_to_ch_tasks.nextval,sys_context('USERENV','SID'))"
+          //"insert into ora_to_ch_tasks (id) values (s_ora_to_ch_tasks.nextval)"
         val idCol: Array[String] = Array("ID")
         val insertTask = conn.prepareStatement(query, idCol)
         val affectedRows: Int = insertTask.executeUpdate()

@@ -15,4 +15,9 @@ create table data.eaist_lot
 )ENGINE = MergeTree()
 PRIMARY KEY (id);
 
+select s.sid,s.PROGRAM,s.MODULE,s.ACTION
+from v$session s
+where s.OSUSER='yakushev' and
+      s.MODULE='ORATOCH'
+
 

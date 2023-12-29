@@ -1,10 +1,10 @@
 package server
 
 
-import clickhouse.{jdbcChSession, jdbcChSessionImpl}
+import clickhouse.{chSess, jdbcChSession, jdbcChSessionImpl}
 import conf.OraServer
 import error.ResponseMessage
-import ora.{jdbcSession, jdbcSessionImpl}
+import ora.{jdbcSession, jdbcSessionImpl, oraSess}
 import request.{ReqNewTask, SrcTable}
 import task.{Executing, ImplTaskRepo, Ready, TaskState, Wait, WsTask}
 import zio.{ZIO, _}
@@ -18,11 +18,10 @@ import scala.collection.immutable.List
 
 object WServer {
 
-  private def createWsTask(newTask: Task[ReqNewTask]):  ZIO[OraServer with jdbcSession, Throwable, WsTask] = for {
+  private def createWsTask(newtask: ReqNewTask): ZIO[OraServer with jdbcSession, Throwable, Tuple2[WsTask,oraSess]] = for {
     jdbc <- ZIO.service[jdbcSession]
     sess <- jdbc.sess
     taskId <- sess.getTaskIdFromSess
-    newtask <- newTask
     t <- sess.getTables(newtask.schemas)
     wstask = WsTask(id = taskId,
       state = TaskState(Ready, Option.empty[Table]),
@@ -30,22 +29,43 @@ object WServer {
       clickhouseServer = Some(newtask.servers.clickhouse),
       mode = newtask.servers.config,
       tables = t)
-  } yield wstask
+  } yield (wstask,sess)
 
+  private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess): ZIO[Any,Nothing,Unit] = for {
+    copiedRows <- ch.getCountCopiedRows(table)
+    //_ <- ZIO.logInfo(s"updatedCopiedRowsCount copiedRows=$copiedRows ..............................")
+    _ <- ora.updateCountCopiedRows(table,copiedRows)
+  } yield ()
 
-  private def startTask(wstask: WsTask) : ZIO[ImplTaskRepo with OraServer with jdbcSession with jdbcChSession, Throwable, Unit] = for {
+  private def startTask(sess: oraSess): ZIO[ImplTaskRepo with jdbcChSession, Throwable, Unit] = for {
     repo <- ZIO.service[ImplTaskRepo]
-    stateBefore <- repo.getState()
+    stateBefore <- repo.getState
     _ <- repo.setState(TaskState(Executing))
-    stateAfter <- repo.getState()
-    _ <- ZIO.logInfo(s" [startTask] [${wstask.id}] State: ${stateBefore} -> ${stateAfter} ")
-    jdbc <- ZIO.service[jdbcSession] //todo: don't call it, new session
-    sess <- jdbc.sess
-    _ <- ZIO.logInfo(s"[startTask] Oracle session taskId = ${sess.taskId}")
+    stateAfter <- repo.getState
+    taskId <- repo.getTaskId
+    _ <- ZIO.logInfo(s"[startTask] [${taskId}] State: ${stateBefore} -> ${stateAfter} ")
+    taskId <- repo.getTaskId
     jdbcCh <- ZIO.service[jdbcChSession]
-    sessCh <- jdbcCh.sess(sess.taskId)
+    sessCh <- jdbcCh.sess(taskId)
     _ <- ZIO.logInfo(s"[startTask] Clickhouse session taskId = ${sessCh.taskId}")
+    task <- repo.ref.get
+    setSchemas = task.tables.map(_.schema).toSet diff Set("system","default","information_schema")
+    _ <- sess.saveTableList(task.tables)
+    _ <- sessCh.createDatabases(setSchemas)
+    _ <- sess.setTaskState("executing")
+    fetch_size = task.oraServer.map(_.fetch_size).getOrElse(1000)
+    batch_size = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
 
+    copyEffects = task.tables.map{table =>
+      sess.setTableBeginCopy(table) *>
+        updatedCopiedRowsCount(table,sess,sessCh)//.onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted."))
+          .repeat(Schedule.spaced(2.second)).fork *>
+             sessCh.recreateTableCopyData(table, sess.getDataResultSet(table, fetch_size), batch_size).flatMap {
+              rc => sess.setTableCopied(table, rc) //*> f.interrupt
+            }
+    }
+    _ <- ZIO.collectAll(copyEffects)
+    _ <- sess.taskFinished
   } yield ()
 
   private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
@@ -70,11 +90,12 @@ object WServer {
       case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
       case Right(newTask) =>
         for {
-          wstask <- createWsTask(ZIO.succeed(newTask)).provide(ZLayer.succeed(newTask.servers.oracle), jdbcSessionImpl.layer)
+          taskWithOraSess <- createWsTask(newTask).provide(ZLayer.succeed(newTask.servers.oracle), jdbcSessionImpl.layer)
+          wstask = taskWithOraSess._1
+          ora = taskWithOraSess._2
           tr <- ZIO.service[ImplTaskRepo]
-          _ <- startTask(wstask).provide(ZLayer.succeed(tr),
-                                   ZLayer.succeed(newTask.servers.oracle),
-                                   jdbcSessionImpl.layer,
+          _ <- tr.create(wstask)
+          _ <- startTask(ora).provide(ZLayer.succeed(tr),
                                    ZLayer.succeed(newTask.servers.clickhouse),
                                    jdbcChSessionImpl.layer).forkDaemon
           //_ <- fiber.join
