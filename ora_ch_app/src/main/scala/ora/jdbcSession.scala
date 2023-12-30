@@ -19,6 +19,17 @@ case class oraSess(sess : Connection, taskId: Int){
           case PrimaryKey | UniqueKey => s"select * from ${table.schema}.${table.name}" //todo: REMOVE where rownum <= 3000
           case RnKey => s"select row_number() over(order by null) as rn,t.* from ${table.schema}.${table.name} t" //todo: REMOVE where rownum <= 3000
         }
+      //********************* CONTEXT *************************
+      val contextSql =
+        """
+          | begin
+          |   msk_analytics.set_curr_date_context(to_char(to_date(20231227,'yyyymmdd'),'dd.mm.yyyy'));
+          |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date(20231227,'yyyymmdd'),'dd.mm.yyyy'));
+          |end;
+          |""".stripMargin
+      val prec = sess.prepareCall(contextSql)
+      prec.execute()
+      //*******************************************************
       val dataRs = sess.createStatement.executeQuery(dataQuery)
       dataRs.setFetchSize(fetch_size)
       dataRs
@@ -38,6 +49,7 @@ case class oraSess(sess : Connection, taskId: Int){
           s"insert into ora_to_ch_tasks_tables(id_task,schema_name,table_name) values($taskId,'${t.schema}','${t.name}') "
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         rs.next()
+        sess.commit()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -54,6 +66,7 @@ case class oraSess(sess : Connection, taskId: Int){
           s"update ora_to_ch_tasks set state='$state' where id=$taskId"
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         rs.next()
+        sess.commit()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -73,6 +86,7 @@ case class oraSess(sess : Connection, taskId: Int){
              |       t.table_name='${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         rs.next()
+        sess.commit()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -98,6 +112,7 @@ case class oraSess(sess : Connection, taskId: Int){
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         rs.next()
+        sess.commit()
         }.catchAllDefect {
            case e: Exception => ZIO.logError(s"No problem. updateCountCopiedRows - Defect - ${e.getMessage}")
         }
@@ -125,6 +140,7 @@ case class oraSess(sess : Connection, taskId: Int){
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         rs.next()
+        sess.commit()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -141,6 +157,7 @@ case class oraSess(sess : Connection, taskId: Int){
           s"update ora_to_ch_tasks set end_datetime = sysdate,state='finished' where id=$taskId"
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         rs.next()
+        sess.commit()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -267,7 +284,7 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
         props.setProperty("user", ora.user)
         props.setProperty("password", ora.password)
         val conn = DriverManager.getConnection(ora.getUrl(), props)
-        conn.setAutoCommit(true)
+        conn.setAutoCommit(false)
         conn.setClientInfo("OCSID.MODULE", "ORATOCH")
         val query: String = "insert into ora_to_ch_tasks (id,ora_sid) values (s_ora_to_ch_tasks.nextval,sys_context('USERENV','SID'))"
           //"insert into ora_to_ch_tasks (id) values (s_ora_to_ch_tasks.nextval)"
@@ -277,6 +294,7 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
         val generatedKeys = insertTask.getGeneratedKeys
         generatedKeys.next()
         val taskId: Int = generatedKeys.getInt(1)
+        conn.commit()
         conn.setClientInfo("OCSID.ACTION", s"taskid_$taskId")
         oraSess(conn,taskId)
       }.catchAll {

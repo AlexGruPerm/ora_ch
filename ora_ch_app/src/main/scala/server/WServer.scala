@@ -59,7 +59,7 @@ object WServer {
     copyEffects = task.tables.map{table =>
       sess.setTableBeginCopy(table) *>
         updatedCopiedRowsCount(table,sess,sessCh)//.onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted."))
-          .repeat(Schedule.spaced(2.second)).fork *>
+          .repeat(Schedule.spaced(5.second)).fork *>
              sessCh.recreateTableCopyData(table, sess.getDataResultSet(table, fetch_size), batch_size).flatMap {
               rc => sess.setTableCopied(table, rc) //*> f.interrupt
             }
