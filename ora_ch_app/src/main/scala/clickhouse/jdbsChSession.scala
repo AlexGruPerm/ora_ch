@@ -70,6 +70,8 @@ case class chSess(sess : Connection, taskId: Int){
             }
          |""".stripMargin
 
+    //_ <- ZIO.logInfo(s"createScript = $createScript")
+
     insQuer =
       s"""insert into ${table.schema}.${table.name}
          |select $nakedCols
@@ -78,8 +80,7 @@ case class chSess(sess : Connection, taskId: Int){
          |      ')
          |""".stripMargin
 
-    //_ <- ZIO.logInfo(s"batch_size = $batch_size")
-    //_ <- ZIO.logInfo(insQuer)
+    //_ <- ZIO.logInfo(s"insQuer = $insQuer")
 
     rows <- ZIO.attemptBlocking {
       sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
@@ -93,8 +94,22 @@ case class chSess(sess : Connection, taskId: Int){
           cols.foldLeft(1) {
             case (i, c) =>
               (c.typeName, c.scale) match {
-                case ("NUMBER", 0) => ps.setInt(i, rs.getInt(c.name))
+                // Long - because getInt is that 4294967298 is outside the range of Java's int
+                case ("NUMBER", 0) => ps.setLong(i, rs.getLong(c.name))
+/*                  {
+                    println(s"NUMBER_0 ${c.name}")
+                    val intVal: Long = rs.getLong(c.name)
+                    println(s"intVal = $intVal")
+                    ps.setLong(i, intVal)
+                    //ps.SetLong ???
+                  }*/
                 case ("NUMBER", _) => ps.setDouble(i, rs.getDouble(c.name))
+/*                  {
+                    println(s"NUMBER__ ${c.name}")
+                    val dblVal: Double = rs.getDouble(c.name)
+                    println(s"dblVal = $dblVal")
+                    ps.setDouble(i, dblVal)
+                  }*/
                 /*
                   {
                   val d: java.math.BigDecimal = rs.getBigDecimal(c.name)
@@ -109,16 +124,16 @@ case class chSess(sess : Connection, taskId: Int){
                   val isNull: Boolean = rs.wasNull()
                   if (!isNull) {
                     val dateAsUnixtimestamp = dateTimeStringToEpoch(tmp)
-                    if (dateAsUnixtimestamp < -18000L)
-                      ps.setObject(i, "1970-01-01 00:00:00")
+                    if (dateAsUnixtimestamp <= 0L)
+                      ps.setObject(i, "1971-01-01 00:00:00")
                     else {
-                      if (dateAsUnixtimestamp > 4296677295L)
+                      if (dateAsUnixtimestamp >= 4296677295L)
                         ps.setObject(i, "2106-01-01 00:00:00")
                       else
                         ps.setObject(i, tmp)
                     }
                   } else
-                    ps.setObject(i, Types.NULL) //todo: compare with ps.setNull(i,Types.DATE)
+                      ps.setNull(i,Types.DATE)
                 }
               }
               i + 1
@@ -139,7 +154,7 @@ case class chSess(sess : Connection, taskId: Int){
       rowCount
 
     }.catchAll {
-      case e: Exception => ZIO.logError(e.getMessage) *>
+      case e: Exception => ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace}") *>
         ZIO.fail(new Exception(s"${e.getMessage}"))
     }
 
