@@ -54,7 +54,7 @@ ThisBuild / scalaVersion := "2.13.10"
       val zio_json          = "dev.zio" %% "zio-json" % Versions.zio_json
 
       val zioDep = List(zio, zio_conf, zio_conf_typesafe, zio_conf_magnolia, zio_http, zio_json)
-      val chDep = List(chHttpClient,apacheHttpClient, ch, /*chClient, chJdbcBridg,*/ slf4j, log4j, lz4)
+      val chDep = List(chHttpClient,apacheHttpClient, ch, slf4j, log4j, lz4)
     }
 
   val commonDependencies = {
@@ -93,7 +93,7 @@ ThisBuild / scalaVersion := "2.13.10"
     case PathList("module-info.class") => MergeStrategy.discard
     case x if x.endsWith("/module-info.class") => MergeStrategy.discard
     case "reference.conf" => MergeStrategy.concat
-    case "META-INF/services/com.clickhouse.client.ClickHouseClient" => MergeStrategy.concat
+    case "META-INF/services/com.clickhouse.client.ClickHouseClient" => MergeStrategy.first
     case PathList("META-INF", xs @ _*)         => MergeStrategy.discard
     case _ => MergeStrategy.first
   }

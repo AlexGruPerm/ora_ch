@@ -177,19 +177,40 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
 
   def sess(taskId: Int): ZIO[Any, Exception, chSess] = for {
     session <- chConnection(taskId)
+    _ <- ZIO.logInfo("~~~~~~~~~~~~~~~ Clickhouse connect properties ~~~~~~~~~~~~~~~~")
+    cnt = props.keySet().size()
+    _ <- ZIO.logInfo(s"Connection has $cnt properties")
+    keys = props.keySet().toArray.map(_.toString).toList
+    _ <- ZIO.foreachDiscard(keys)(k => ZIO.logInfo(s"${k} - ${props.getProperty(k)}]"))
+    _ <- ZIO.logInfo("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    _ <- ZIO.logInfo(s" = [${props.getProperty("")}]")
   } yield session
 
   override def chConnection(taskId: Int): ZIO[Any, Exception, chSess] = for {
     _ <- ZIO.unit
     sessEffect = ZIO.attemptBlocking {
-      //ClickHouseClientOption
-      //HttpConnectionProvider
+      props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
+      /*
+      props.setProperty("http_connection_provider", "APACHE_HTTP_CLIENT")
+      props.setProperty("socket_keepalive", "true")
+      props.setProperty("socket_timeout", "100000000") //ms.
+      props.setProperty("max_execution_time", "100000000")
+      props.setProperty("connection_timeout", "100000000")
+      props.setProperty("dataTransferTimeout", "100000000")
+      props.setProperty("timeToLiveMillis", "100000000")
+      */
 
-      props.setProperty("http_connection_provider", "APACHE_HTTP_CLIENT"/*"HTTP_CLIENT"*//*"HTTP_URL_CONNECTION"*/)
+      /*
+      set max_execution_time=60000;
+      clickHouseDataSource.getProperties().setConnectionTimeout(10000000);
+      clickHouseDataSource.getProperties().setSocketTimeout(10000000);
+      clickHouseDataSource.getProperties().setTimeToLiveMillis(10000000);
+      clickHouseDataSource.getProperties().setSessionTimeout(10000000L);
+      clickHouseDataSource.getProperties().setDataTransferTimeout(10000000);
+      clickHouseDataSource.getProperties().setMaxExecutionTime(10000000);
+      */
       val dataSource = new ClickHouseDataSource(ch.getUrl, props)
       val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
-
-
       /*
       DriverManager.registerDriver(new ClickHouseDriver)
       val properties = new Properties()
@@ -197,7 +218,6 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
       properties.setProperty("password", ch.password);
       val conn = DriverManager.getConnection(ch.getUrl, properties)
       */
-
       chSess(conn,taskId)
     }.catchAll {
       case e: Exception => ZIO.logError(s"${e.getMessage} - url=[${ch.getUrl}] user=[${ch.user}] password=[${ch.password}] port=[${ch.port}] provider = [${props.getProperty("http_connection_provider")}]") *>

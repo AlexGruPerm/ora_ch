@@ -1,6 +1,68 @@
 {
  "servers":{
    "oracle":{
+     "ip" : "10.206.161.9",
+     "port": 1521,
+     "tnsname" : "nsser",
+     "fetch_size" : 5000,
+     "user" : "dbadmin",
+     "password" : "dbadmin"
+   },
+   "clickhouse":{
+     "ip": "192.168.56.100",
+     "port": 8123,
+     "db" : "default",
+     "batch_size" : 10000,
+     "user" : "admin",
+     "password" : "admin"
+   },
+   "config":{
+     "mode":"sequentially"
+   }
+ },
+   "schemas":[
+     {"schema":"msk_analytics_caches",
+     "tables":[
+       {"name":"cache_for_calc_12904_11487"}
+     ]}
+   ]
+}
+
+
+{
+ "servers":{
+   "oracle":{
+     "ip" : "10.206.161.9",
+     "port": 1521,
+     "tnsname" : "nsser",
+     "fetch_size" : 10000,
+     "user" : "dbadmin",
+     "password" : "dbadmin"
+   },
+   "clickhouse":{
+     "ip": "192.168.56.100",
+     "port": 8123,
+     "db" : "default",
+     "batch_size" : 20000,
+     "user" : "admin",
+     "password" : "admin"
+   },
+   "config":{
+     "mode":"sequentially"
+   }
+ },
+   "schemas":[
+     {"schema":"msk_analytics_caches",
+     "tables":[
+       {"name":"cache_for_calc_12904_11487"}
+     ]}
+   ]
+}
+
+
+{
+ "servers":{
+   "oracle":{
      "ip" : "10.206.161.2",
      "port": 1521,
      "tnsname" : "test",
