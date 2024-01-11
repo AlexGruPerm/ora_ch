@@ -1,12 +1,14 @@
 package clickhouse
 
 import column.OraChColumn
-import com.clickhouse.jdbc.{ClickHouseConnection, ClickHouseDataSource}
+import com.clickhouse.client.config.ClickHouseClientOption
+import com.clickhouse.client.http.config.HttpConnectionProvider
+import com.clickhouse.jdbc.{ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver}
 import conf.ClickhouseServer
 import table._
 import zio.{ZIO, ZLayer}
 
-import java.sql.{Connection, PreparedStatement, ResultSet, Types}
+import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, Types}
 import java.time.{LocalDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
@@ -180,13 +182,26 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
   override def chConnection(taskId: Int): ZIO[Any, Exception, chSess] = for {
     _ <- ZIO.unit
     sessEffect = ZIO.attemptBlocking {
-      props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
+      //ClickHouseClientOption
+      //HttpConnectionProvider
+
+      props.setProperty("http_connection_provider", "APACHE_HTTP_CLIENT"/*"HTTP_CLIENT"*//*"HTTP_URL_CONNECTION"*/)
       val dataSource = new ClickHouseDataSource(ch.getUrl, props)
-      val conn: ClickHouseConnection = dataSource.getConnection("admin", "admin")
+      val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
+
+
+      /*
+      DriverManager.registerDriver(new ClickHouseDriver)
+      val properties = new Properties()
+      properties.setProperty("user", ch.user);
+      properties.setProperty("password", ch.password);
+      val conn = DriverManager.getConnection(ch.getUrl, properties)
+      */
+
       chSess(conn,taskId)
     }.catchAll {
-      case e: Exception => ZIO.logError(e.getMessage) *>
-        ZIO.fail(new Exception(s"${e.getMessage} - ${ch.getUrl}"))
+      case e: Exception => ZIO.logError(s"${e.getMessage} - url=[${ch.getUrl}] user=[${ch.user}] password=[${ch.password}] port=[${ch.port}] provider = [${props.getProperty("http_connection_provider")}]") *>
+        ZIO.fail(new Exception(s"${e.getMessage} - url=[${ch.getUrl}] user=[${ch.user}] password=[${ch.password}] port=[${ch.port}] provider = [${props.getProperty("http_connection_provider")}]"))
     }
     _ <- ZIO.logInfo(s"  ") *>
       ZIO.logInfo(s"New clickhouse connection =============== >>>>>>>>>>>>> ")

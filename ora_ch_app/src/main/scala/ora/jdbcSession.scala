@@ -2,6 +2,7 @@ package ora
 
 import zio.{Task, _}
 import conf.OraServer
+import oracle.jdbc.OracleDriver
 import request.SrcTable
 import table.{KeyType, PrimaryKey, RnKey, Table, UniqueKey}
 
@@ -281,6 +282,7 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
    override def pgConnection():  ZIO[Any,Exception,oraSess] = for {
     _ <- ZIO.unit
     sessEffect = ZIO.attemptBlocking{
+        DriverManager.registerDriver(new OracleDriver())
         props.setProperty("user", ora.user)
         props.setProperty("password", ora.password)
         val conn = DriverManager.getConnection(ora.getUrl(), props)
