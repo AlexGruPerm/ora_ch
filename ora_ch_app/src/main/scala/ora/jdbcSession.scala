@@ -12,7 +12,7 @@ import java.util.Properties
 
 case class oraSess(sess : Connection, taskId: Int){
 
-  def getDataResultSet(table: Table, fetch_size: Int, plsql_context: Option[String]): ZIO[Any, Exception, ResultSet] = for {
+  def getDataResultSet(table: Table, fetch_size: Int, plsql_context_date: Option[String]): ZIO[Any, Exception, ResultSet] = for {
     _ <- ZIO.unit
     rsEffect = ZIO.attemptBlocking {
       val dataQuery =
@@ -21,15 +21,16 @@ case class oraSess(sess : Connection, taskId: Int){
           case RnKey => s"select row_number() over(order by null) as rn,t.* from ${table.schema}.${table.name} t" //todo: REMOVE where rownum <= 3000
         }
       //********************* CONTEXT *************************
-      if (plsql_context.nonEmpty){
-      val contextSql = plsql_context
-        /*"""
+      val ctxDate: String = plsql_context_date.getOrElse(" ")
+      if (plsql_context_date.nonEmpty){
+      val contextSql =
+        s"""
           | begin
-          |   msk_analytics.set_curr_date_context(to_char(to_date(20231227,'yyyymmdd'),'dd.mm.yyyy'));
-          |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date(20231227,'yyyymmdd'),'dd.mm.yyyy'));
+          |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+          |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
           |end;
-          |""".stripMargin*/
-      val prec = sess.prepareCall(contextSql.getOrElse(" "))
+          |""".stripMargin
+      val prec = sess.prepareCall(contextSql)
       prec.execute()
       } else ()
       //*******************************************************

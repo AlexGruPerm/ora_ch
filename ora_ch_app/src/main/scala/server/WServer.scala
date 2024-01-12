@@ -28,7 +28,7 @@ object WServer {
       oraServer = Some(newtask.servers.oracle),
       clickhouseServer = Some(newtask.servers.clickhouse),
       mode = newtask.servers.config,
-      plsql_context = newtask.servers.plsql_context,
+      plsql_context_date = newtask.servers.plsql_context_date,
       tables = t)
   } yield (wstask,sess)
 
@@ -61,7 +61,7 @@ object WServer {
       sess.setTableBeginCopy(table) *>
         updatedCopiedRowsCount(table,sess,sessCh)//.onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted."))
           .repeat(Schedule.spaced(5.second)).fork *>
-             sessCh.recreateTableCopyData(table, sess.getDataResultSet(table, fetch_size, task.plsql_context), batch_size).flatMap {
+             sessCh.recreateTableCopyData(table, sess.getDataResultSet(table, fetch_size, task.plsql_context_date), batch_size).flatMap {
               rc => sess.setTableCopied(table, rc) //*> f.interrupt
             }
     }

@@ -10,7 +10,7 @@ case class SrcTable(schema: String, tables: List[OneTable] = List.empty[OneTable
 case class Servers(oracle: OraServer,
                    clickhouse: ClickhouseServer,
                    config : Mode = Mode(),
-                   plsql_context: Option[String]
+                   plsql_context_date: Option[String]
                   )
 
 case class ReqNewTask(servers: Servers, schemas: List[SrcTable] = List.empty[SrcTable])
