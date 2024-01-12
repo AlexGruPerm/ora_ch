@@ -12,7 +12,7 @@ import java.util.Properties
 
 case class oraSess(sess : Connection, taskId: Int){
 
-  def getDataResultSet(table: Table, fetch_size: Int): ZIO[Any, Exception, ResultSet] = for {
+  def getDataResultSet(table: Table, fetch_size: Int, plsql_context: Option[String]): ZIO[Any, Exception, ResultSet] = for {
     _ <- ZIO.unit
     rsEffect = ZIO.attemptBlocking {
       val dataQuery =
@@ -21,15 +21,17 @@ case class oraSess(sess : Connection, taskId: Int){
           case RnKey => s"select row_number() over(order by null) as rn,t.* from ${table.schema}.${table.name} t" //todo: REMOVE where rownum <= 3000
         }
       //********************* CONTEXT *************************
-      val contextSql =
-        """
+      if (plsql_context.nonEmpty){
+      val contextSql = plsql_context
+        /*"""
           | begin
           |   msk_analytics.set_curr_date_context(to_char(to_date(20231227,'yyyymmdd'),'dd.mm.yyyy'));
           |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date(20231227,'yyyymmdd'),'dd.mm.yyyy'));
           |end;
-          |""".stripMargin
-      val prec = sess.prepareCall(contextSql)
+          |""".stripMargin*/
+      val prec = sess.prepareCall(contextSql.getOrElse(" "))
       prec.execute()
+      } else ()
       //*******************************************************
       val dataRs = sess.createStatement.executeQuery(dataQuery)
       dataRs.setFetchSize(fetch_size)
@@ -148,8 +150,6 @@ case class oraSess(sess : Connection, taskId: Int){
       }
   } yield ()
 
-
-
   def taskFinished: ZIO[Any, Exception, Unit] = for {
     taskId <- getTaskIdFromSess
     _ <-
@@ -161,6 +161,16 @@ case class oraSess(sess : Connection, taskId: Int){
         sess.commit()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+  } yield ()
+
+  def closeConnection: ZIO[Any, Exception, Unit] = for {
+    _ <- ZIO.logInfo("Closing Oracle connection")
+    _ <- ZIO.attemptBlocking {
+        sess.close()
+      }.catchAll {
+        case e: Exception => ZIO.logError(s"Closing Oracle connection - ${e.getMessage}") *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
       }
   } yield ()
@@ -279,7 +289,7 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
      session <- pgConnection()
    } yield session
 
-   override def pgConnection():  ZIO[Any,Exception,oraSess] = for {
+   def pgConnection():  ZIO[Any,Exception,oraSess] = for {
     _ <- ZIO.unit
     sessEffect = ZIO.attemptBlocking{
         DriverManager.registerDriver(new OracleDriver())
@@ -289,7 +299,6 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
         conn.setAutoCommit(false)
         conn.setClientInfo("OCSID.MODULE", "ORATOCH")
         val query: String = "insert into ora_to_ch_tasks (id,ora_sid) values (s_ora_to_ch_tasks.nextval,sys_context('USERENV','SID'))"
-          //"insert into ora_to_ch_tasks (id) values (s_ora_to_ch_tasks.nextval)"
         val idCol: Array[String] = Array("ID")
         val insertTask = conn.prepareStatement(query, idCol)
         val affectedRows: Int = insertTask.executeUpdate()
