@@ -2,7 +2,7 @@ package app
 
 import server.WServer
 import task.ImplTaskRepo
-import zio._
+import zio.{ZIO, _}
 import zio.http._
 
 object MainApp extends ZIOAppDefault {
@@ -13,5 +13,10 @@ object MainApp extends ZIOAppDefault {
     } *> ZIO.never)
       .provide(ImplTaskRepo.layer,
         Server.defaultWithPort(8081))
+
+  /*
+  val listEffects: List[ZIO[Any,Nothing,Int]] = List(ZIO.succeed(1),ZIO.succeed(1),ZIO.succeed(1))
+  ZIO.collectAllPar(listEffects).withParallelism(3)
+  */
 
 }

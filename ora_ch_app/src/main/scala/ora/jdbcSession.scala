@@ -2,9 +2,10 @@ package ora
 
 import zio.{Task, _}
 import conf.OraServer
+import jdk.internal.org.jline.utils.ShutdownHooks.Task
 import oracle.jdbc.OracleDriver
 import request.SrcTable
-import table.{KeyType, PrimaryKey, RnKey, Table, UniqueKey}
+import table.{ExtPrimaryKey, KeyType, PrimaryKey, RnKey, Table, UniqueKey}
 
 import java.sql.{Connection, DriverManager, ResultSet, Statement}
 import java.util.Properties
@@ -12,17 +13,19 @@ import java.util.Properties
 
 case class oraSess(sess : Connection, taskId: Int){
 
-  def getDataResultSet(table: Table, fetch_size: Int, plsql_context_date: Option[String]): ZIO[Any, Exception, ResultSet] = for {
+  def getDataResultSet(table: Table, fetch_size: Int): ZIO[Any, Exception, ResultSet] = for {
     _ <- ZIO.unit
     rsEffect = ZIO.attemptBlocking {
       val dataQuery =
         table.keyType match {
+          case ExtPrimaryKey => s"select * from ${table.schema}.${table.name}"
           case PrimaryKey | UniqueKey => s"select * from ${table.schema}.${table.name}" //todo: REMOVE where rownum <= 3000
           case RnKey => s"select row_number() over(order by null) as rn,t.* from ${table.schema}.${table.name} t" //todo: REMOVE where rownum <= 3000
         }
       //********************* CONTEXT *************************
-      val ctxDate: String = plsql_context_date.getOrElse(" ")
-      if (plsql_context_date.nonEmpty){
+      val ctxDate: String = table.plsql_context_date.getOrElse(" ")
+      if (table.plsql_context_date.nonEmpty){
+        //execute immediate 'ALTER SESSION SET nls_length_semantics = BYTE';
       val contextSql =
         s"""
           | begin
@@ -34,7 +37,11 @@ case class oraSess(sess : Connection, taskId: Int){
       prec.execute()
       } else ()
       //*******************************************************
-      val dataRs = sess.createStatement.executeQuery(dataQuery)
+      val dateQueryWithOrd: String = table.ins_select_order_by match {
+        case Some(order_by) => s"$dataQuery order by $order_by"
+        case None => dataQuery
+      }
+      val dataRs = sess.createStatement.executeQuery(dateQueryWithOrd)
       dataRs.setFetchSize(fetch_size)
       dataRs
     }.catchAll {
@@ -52,8 +59,9 @@ case class oraSess(sess : Connection, taskId: Int){
         val query: String =
           s"insert into ora_to_ch_tasks_tables(id_task,schema_name,table_name) values($taskId,'${t.schema}','${t.name}') "
         val rs: ResultSet = sess.createStatement.executeQuery(query)
-        rs.next()
+        rs.next() //todo: ??? maybe remove
         sess.commit()
+        rs.close()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -69,8 +77,9 @@ case class oraSess(sess : Connection, taskId: Int){
         val query: String =
           s"update ora_to_ch_tasks set state='$state' where id=$taskId"
         val rs: ResultSet = sess.createStatement.executeQuery(query)
-        rs.next()
+        rs.next() //todo: ??? maybe remove
         sess.commit()
+        rs.close()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -89,8 +98,9 @@ case class oraSess(sess : Connection, taskId: Int){
              |       t.schema_name='${table.schema}' and
              |       t.table_name='${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
-        rs.next()
+        rs.next() //todo: ??? maybe remove
         sess.commit()
+        rs.close()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -115,8 +125,9 @@ case class oraSess(sess : Connection, taskId: Int){
              |       t.schema_name = '${table.schema}' and
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
-        rs.next()
+        rs.next() //todo: ??? maybe remove
         sess.commit()
+        rs.close()
         }.catchAllDefect {
            case e: Exception => ZIO.logError(s"No problem. updateCountCopiedRows - Defect - ${e.getMessage}")
         }
@@ -143,8 +154,9 @@ case class oraSess(sess : Connection, taskId: Int){
              |       t.schema_name = '${table.schema}' and
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
-        rs.next()
+        rs.next() //todo: ??? maybe remove
         sess.commit()
+        rs.close()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -158,21 +170,22 @@ case class oraSess(sess : Connection, taskId: Int){
         val query: String =
           s"update ora_to_ch_tasks set end_datetime = sysdate,state='finished' where id=$taskId"
         val rs: ResultSet = sess.createStatement.executeQuery(query)
-        rs.next()
+        rs.next() //todo: ??? maybe remove
         sess.commit()
+        rs.close()
       }.catchAll {
         case e: Exception => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
       }
   } yield ()
-
-  def closeConnection: ZIO[Any, Exception, Unit] = for {
+  
+  def closeConnection: ZIO[Any, Nothing, Unit] = for {
     _ <- ZIO.logInfo("Closing Oracle connection")
     _ <- ZIO.attemptBlocking {
         sess.close()
       }.catchAll {
-        case e: Exception => ZIO.logError(s"Closing Oracle connection - ${e.getMessage}") *>
-          ZIO.fail(new Exception(s"${e.getMessage}"))
+        case e: Exception => ZIO.logError(s"Closing Oracle connection - ${e.getMessage}").unit //*>
+          //ZIO.fail(new Exception(s"${e.getMessage}"))
       }
   } yield ()
 
@@ -240,8 +253,8 @@ case class oraSess(sess : Connection, taskId: Int){
       }
       val keyColumns: String = rs.getString("KEYCOLUMNS").toLowerCase
 
+      rs.close()
       (keyType,keyColumns)
-
     }.catchAll {
       case e: Exception => ZIO.logError(e.getMessage) *>
         ZIO.fail(new Exception(s"${e.getMessage}"))
@@ -251,19 +264,32 @@ case class oraSess(sess : Connection, taskId: Int){
     _ <- ZIO.logInfo(s" For $schema.$tableName KEY = ${key._1} - ${key._2}")
   } yield key
 
-  def getTable(schema: String, tableName: String): ZIO[Any, Exception, Table] = for {
-    kt <- getKeyType(schema, tableName)
-  } yield Table(schema, tableName, kt._1, kt._2)
+  def getTable(schema: String,
+               tableName: String,
+               plsql_context_date: Option[String],
+               pk_columns: Option[String],
+               ins_select_order_by: Option[String],
+               partition_by: Option[String],
+               notnull_columns: Option[List[String]]
+              ): ZIO[Any, Exception, Table] = for {
+    kt <- pk_columns match {
+      case Some(ext_pk_cols) => ZIO.succeed((ExtPrimaryKey,ext_pk_cols))
+      case None => getKeyType(schema, tableName)
+    }
+  } yield Table(schema, tableName, kt._1, kt._2, plsql_context_date, pk_columns, ins_select_order_by, partition_by, notnull_columns)
 
   def getTables(stables: List[SrcTable]): ZIO[Any, Exception, List[Table]] = {
-    val schTbl: List[(String, String)] = stables.flatMap { st =>
-      st.tables.map(ot => (st.schema, ot.name))
+    //todo: refactor tuple
+    val schTbl: List[(String, String, Option[String], Option[String], Option[String], Option[String], Option[List[String]])] =
+      stables.flatMap { st =>
+      st.tables.map(ot =>
+        (st.schema, ot.name, ot.plsql_context_date, ot.pk_columns, ot.ins_select_order_by, ot.partition_by, ot.notnull_columns))
     }
 
     val res: List[ZIO[Any, Exception, Table]] =
       for {
         t <- schTbl
-      } yield getTable(t._1, t._2)
+      } yield getTable(t._1, t._2, t._3, t._4, t._5, t._6, t._7) //todo: refactor tuple
 
     val outTables = for {
       values <- ZIO.collectAll {
@@ -317,6 +343,8 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
     _ <- ZIO.logInfo(s"  ") *>
       ZIO.logInfo(s"New connection =============== >>>>>>>>>>>>> ")
     sess <- sessEffect
+    md = sess.sess.getMetaData
+    _ <- ZIO.logInfo(s"Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion}")
     _ <- ZIO.logInfo(s"oracle session id = ${sess.getPid}")
 
   } yield sess

@@ -41,9 +41,42 @@ case class chSess(sess : Connection, taskId: Int){
 
   /**
    * return count of copied rows.
+   *
+   * maybe we need use query for varchar columns:
+   *
+   * select atc.COLUMN_NAME,atc.CHAR_USED
+   * from  ALL_TAB_COLUMNS atc
+   * where atc.OWNER='MSK_ANALYTICS' and
+   * atc.TABLE_NAME='V_GP_KBK_UN' and
+   * atc.COLUMN_NAME='CR_CODE' and
+   * atc.DATA_TYPE='VARCHAR2'
+   * order by atc.COLUMN_ID
+   *
+   * CHAR_USED can be B(Byte) or C(Char)
+   *
+   * Not works:
+   * oraConn.getMetaData.getColumns(null,"msk_analytics","v_gp_kbk_un","cr_code").getInt("CHAR_OCTET_LENGTH")
+   *
   */
-  def recreateTableCopyData(table: Table, rs: ZIO[Any, Exception, ResultSet], batch_size: Int): ZIO[Any, Exception, Int] = for {
+  def recreateTableCopyData(table: Table, rs: ZIO[Any, Exception, ResultSet], batch_size: Int): ZIO[Any, Exception, Int] =
+    for {
+    fn <- ZIO.fiberId.map(_.threadName)
+    _ <- ZIO.logInfo(s"recreateTableCopyData fiber name : $fn")
     oraRs <- rs
+
+/*    _ <- ZIO.logInfo(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    _ <- ZIO.foreachDiscard((1 to oraRs.getMetaData.getColumnCount)){i =>
+      ZIO.logInfo(
+        s"""${oraRs.getMetaData.getColumnName(i).toLowerCase} -
+           |${oraRs.getMetaData.getColumnTypeName(i)} -
+           |${oraRs.getMetaData.getColumnClassName(i)} -
+           |${oraRs.getMetaData.getColumnDisplaySize(i)} -
+           |${oraRs.getMetaData.getPrecision(i)} -
+           |${oraRs.getMetaData.getScale(i)}
+           |""".stripMargin)
+       }
+    _ <- ZIO.logInfo(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")*/
+
     cols = (1 to oraRs.getMetaData.getColumnCount)
       .map(i =>
         OraChColumn(
@@ -51,26 +84,45 @@ case class chSess(sess : Connection, taskId: Int){
           oraRs.getMetaData.getColumnTypeName(i),
           oraRs.getMetaData.getColumnClassName(i),
           oraRs.getMetaData.getColumnDisplaySize(i),
-          oraRs.getMetaData.getPrecision(i),
+          /*todo:
+             06X0100000 - 10 Chars as in getColumnDisplaySize, but 11 Bytes.
+             where X is Cyrillic letter.
+          */
+          //todo: add this property to json. "col_precision_2x":["cr_code"]
+          if (oraRs.getMetaData.getColumnName(i).toLowerCase == "cr_code")
+              oraRs.getMetaData.getPrecision(i)*2
+            else
+              oraRs.getMetaData.getPrecision(i),
           oraRs.getMetaData.getScale(i),
-          oraRs.getMetaData.isNullable(i)
+          oraRs.getMetaData.isNullable(i),
+          table.notnull_columns.getOrElse(List.empty[String])
         )).toList
     nakedCols = cols.map(chCol => chCol.name).mkString(",\n")
     colsScript = cols.map(chCol => chCol.clColumnString).mkString(",\n")
+
+    _ <- ZIO.logInfo(s"keyType = ${table.keyType.toString} External pk_columns = ${table.pk_columns}")
+
     createScript =
       s"""create table ${table.schema}.${table.name}
          |(
          | $colsScript
          |) ENGINE = MergeTree()
          | ${
+             table.partition_by match {
+               case Some(part_by) => s"PARTITION BY ($part_by)"
+               case None => " "
+             }
+            }
+         | ${
               table.keyType match {
+                case ExtPrimaryKey => s"PRIMARY KEY (${table.pk_columns.getOrElse(table.keyColumns)})"
                 case PrimaryKey => s"PRIMARY KEY (${table.keyColumns})"
                 case RnKey | UniqueKey  => s"ORDER BY (${table.keyColumns})"
               }
             }
          |""".stripMargin
 
-    //_ <- ZIO.logInfo(s"createScript = $createScript")
+    _ <- ZIO.logInfo(s"createScript = $createScript")
 
     insQuer =
       s"""insert into ${table.schema}.${table.name}
@@ -80,9 +132,11 @@ case class chSess(sess : Connection, taskId: Int){
          |      ')
          |""".stripMargin
 
-    //_ <- ZIO.logInfo(s"insQuer = $insQuer")
+    _ <- ZIO.logInfo(s"insQuer = $insQuer")
 
-    rows <- ZIO.attemptBlocking {
+    /**todo: replace with attemptBlockingCancelable or attemptBlockingInterrupt
+    */
+    rows <- ZIO.attemptBlockingInterrupt {
       sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
       sess.createStatement.executeQuery(createScript)
 
@@ -153,8 +207,11 @@ case class chSess(sess : Connection, taskId: Int){
       val rowCount = rsRowCount.getInt(1)
       rowCount
 
-    }.catchAll {
-      case e: Exception => ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace}") *>
+    }.ensuring(
+      ZIO.logError("End of the blocking operation [attemptBlockingInterrupt] in recreateTableCopyData.")
+    ).catchAll {
+      case e: Exception =>
+        ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>
         ZIO.fail(new Exception(s"${e.getMessage}"))
     }
 

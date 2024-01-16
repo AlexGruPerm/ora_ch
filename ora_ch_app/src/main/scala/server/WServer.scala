@@ -28,7 +28,6 @@ object WServer {
       oraServer = Some(newtask.servers.oracle),
       clickhouseServer = Some(newtask.servers.clickhouse),
       mode = newtask.servers.config,
-      plsql_context_date = newtask.servers.plsql_context_date,
       tables = t)
   } yield (wstask,sess)
 
@@ -59,13 +58,16 @@ object WServer {
 
     copyEffects = task.tables.map{table =>
       sess.setTableBeginCopy(table) *>
-        updatedCopiedRowsCount(table,sess,sessCh)//.onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted."))
+        updatedCopiedRowsCount(table,sess,sessCh)
           .repeat(Schedule.spaced(5.second)).fork *>
-             sessCh.recreateTableCopyData(table, sess.getDataResultSet(table, fetch_size, task.plsql_context_date), batch_size).flatMap {
-              rc => sess.setTableCopied(table, rc) //*> f.interrupt
-            }
+             sessCh.recreateTableCopyData(table, sess.getDataResultSet(table, fetch_size), batch_size).flatMap {
+              rc => sess.setTableCopied(table, rc)
+            }.onInterrupt{
+               ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing") *>
+                 sess.closeConnection
+             }
     }
-    _ <- ZIO.collectAll(copyEffects)
+    _ <- ZIO.collectAll(copyEffects) //todo: ZIO.collectAllPar(copyEffects).withParallelism(par_degree)
     _ <- sess.taskFinished
     _ <- sess.closeConnection
   } yield ()
@@ -133,7 +135,7 @@ object WServer {
     }
 
   private val routes = Routes(
-    Method.POST / "task" -> handler{(req: Request) => catchCover(task(req))},
+    Method.POST / "task"  -> handler{(req: Request) => catchCover(task(req))},
     Method.GET / "random" -> handler(Random.nextString(10).map(Response.text(_))),
     Method.GET / "utc"    -> handler(Clock.currentDateTime.map(s => Response.text(s.toString))),
     Method.GET / "main"   -> handler(catchCover(getMainPage)),

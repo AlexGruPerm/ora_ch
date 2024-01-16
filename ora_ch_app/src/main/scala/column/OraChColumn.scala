@@ -32,17 +32,23 @@ object OraChColumn {
             displaySize: Int,
             precision: Int,
             scale: Int,
-            isNullable: Int): OraChColumn = {
+            isNullable: Int,
+            notnull_columns: List[String]): OraChColumn = {
 
-    val nnLeftSide: String =
-      if (isNullable == 1 && name.toLowerCase!="rn")
+/*    val nnLeftSide: String =
+      if (isNullable == 1 && name.toLowerCase!="rn" && !notnull_columns.map(_.toLowerCase).contains(name.toLowerCase))
         "Nullable("
       else ""
 
     val nnRightSide: String =
-      if (isNullable == 1 && name.toLowerCase!="rn")
+      if (isNullable == 1 && name.toLowerCase!="rn" && !notnull_columns.map(_.toLowerCase).contains(name.toLowerCase))
         ")"
-      else ""
+      else ""*/
+
+    val (nnLeftSide,nnRightSide) =
+      if (isNullable == 1 && name.toLowerCase != "rn" && !notnull_columns.map(_.toLowerCase).contains(name.toLowerCase))
+      ("Nullable(",")")
+    else ("","")
 
     def getChCol: String =
       typeName match {
@@ -50,7 +56,7 @@ object OraChColumn {
           case 0 => "UInt64"
           case _ => "Decimal128(6)" //"Decimal64(6)"
         }
-        case "VARCHAR2" => s"FixedString(${precision})"
+        case "VARCHAR2" => s"FixedString($precision)"
         case "DATE" => "DateTime"
         case "CLOB" => "String"
         case _ => "UNDEFINED_COL_TYPE"

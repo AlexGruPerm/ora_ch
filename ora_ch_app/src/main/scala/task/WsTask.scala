@@ -9,7 +9,6 @@ case class WsTask(
                   oraServer: Option[OraServer] = Option.empty[OraServer],
                   clickhouseServer: Option[ClickhouseServer] = Option.empty[ClickhouseServer],
                   mode : Mode = Mode(),
-                  plsql_context_date: Option[String] = Option.empty[String],
                   tables: List[Table] = List.empty[Table]
                  )
 

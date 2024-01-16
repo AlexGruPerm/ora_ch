@@ -3,14 +3,19 @@ package request
 import conf.{ClickhouseServer, Mode, ModeType, OraServer, Parallel, Sequentially}
 import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
-case class OneTable(name: String)
+case class OneTable(name: String,
+                    plsql_context_date: Option[String] = Option.empty[String],
+                    pk_columns: Option[String] = Option.empty[String],
+                    ins_select_order_by: Option[String] = Option.empty[String],
+                    partition_by: Option[String] = Option.empty[String],
+                    notnull_columns: Option[List[String]] = Option.empty[List[String]]
+                   )
 
 case class SrcTable(schema: String, tables: List[OneTable] = List.empty[OneTable])
 
 case class Servers(oracle: OraServer,
                    clickhouse: ClickhouseServer,
-                   config : Mode = Mode(),
-                   plsql_context_date: Option[String]
+                   config : Mode = Mode()
                   )
 
 case class ReqNewTask(servers: Servers, schemas: List[SrcTable] = List.empty[SrcTable])
