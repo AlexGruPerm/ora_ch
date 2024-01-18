@@ -13,6 +13,8 @@ import java.time.{LocalDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 
+import common.Types._
+
 case class chSess(sess : Connection, taskId: Int){
 
   val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
@@ -20,21 +22,68 @@ case class chSess(sess : Connection, taskId: Int){
   def dateTimeStringToEpoch(s: String): Long =
     LocalDateTime.parse(s, formatter).toEpochSecond(ZoneOffset.UTC)
 
+  def isTableExistsCh(table: Table): ZIO[Any, Throwable, Int] = for {
+    tblExists <- ZIO.attemptBlocking {
+      val rs = sess.createStatement.executeQuery(
+        s"""
+           | select if(exists(
+           |				          select 1
+           |				            from system.tables t
+           |				           where t.database = '${table.schema.toLowerCase}' and
+           |				                 t.name     = '${table.name.toLowerCase}'
+           |                 ),1,0) as is_table_exists
+           |""".stripMargin)
+      rs.next()
+      val resTblEx = rs.getInt(1)
+      rs.close()
+      resTblEx
+    }.catchAll {
+      case e: Exception => ZIO.logError(s"isTableExistsCh exception - ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield tblExists
+
+
+
+  def getMaxValueByColCh(table: Table): ZIO[Any,Throwable,MaxValAndCnt] = for {
+    maxVal <- ZIO.attemptBlocking {
+      val q =
+        s""" select max(${table.sync_by_column_max.getOrElse("xxx")}) as maxVal,sum(1) as cnt
+           |   from ${table.schema.toLowerCase}.${table.name.toLowerCase} """
+          .stripMargin
+      val rs = sess.createStatement.executeQuery(q)
+      rs.next()
+      val mvc = MaxValAndCnt(rs.getLong(1),rs.getLong(2))
+      mvc
+    }.catchAll {
+      case e: Exception => ZIO.logError(s"getMaxValueByColCh exception - ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield maxVal
+
+  def getMaxColForSync(table: Table): ZIO[Any,Throwable,Option[MaxValAndCnt]] = for {
+    _ <- ZIO.logInfo(s"getMaxColForSync sync_by_column_max = ${table.sync_by_column_max}")
+    tblExistsCh <- isTableExistsCh(table).when(table.sync_by_column_max.nonEmpty)
+    _ <- ZIO.logInfo(s"tblExistsCh = $tblExistsCh")
+    maxColCh <- getMaxValueByColCh(table).when(tblExistsCh.getOrElse(0)==1)
+    _ <- ZIO.logInfo(s"maxColCh = $maxColCh")
+  } yield maxColCh
+
   /**
    * return count of copied rows.
    */
-  def getCountCopiedRows(table: Table): ZIO[Any, Nothing, Int] = for {
+  def getCountCopiedRows(table: Table): ZIO[Any, Nothing, Long] = for {
     rows <- ZIO.attempt {
       val rsRowCount = sess.createStatement.executeQuery(s"select count() as cnt from ${table.schema}.${table.name}")
       rsRowCount.next()
-      val rowCount = rsRowCount.getInt(1)
+      val rowCount = rsRowCount.getLong(1)
       rowCount
       }.catchAllDefect {
         case e: Exception => ZIO.logError(s"No problem. getCountCopiedRows - Defect - ${e.getMessage}") *>
-          ZIO.succeed(0)
+          ZIO.succeed(0L)
       }.catchAll {
       case e: Exception => ZIO.logError(s"No problem. getCountCopiedRows - Exception - ${e.getMessage}") *>
-        ZIO.succeed(0)
+        ZIO.succeed(0L)
     }
   } yield rows
 
@@ -58,7 +107,7 @@ case class chSess(sess : Connection, taskId: Int){
    * oraConn.getMetaData.getColumns(null,"msk_analytics","v_gp_kbk_un","cr_code").getInt("CHAR_OCTET_LENGTH")
    *
   */
-  def recreateTableCopyData(table: Table, rs: ZIO[Any, Exception, ResultSet], batch_size: Int): ZIO[Any, Exception, Int] =
+  def recreateTableCopyData(table: Table, rs: ZIO[Any, Exception, ResultSet], batch_size: Int, maxValCnt: Option[MaxValAndCnt]): ZIO[Any, Exception, Long] =
     for {
     fn <- ZIO.fiberId.map(_.threadName)
     _ <- ZIO.logInfo(s"recreateTableCopyData fiber name : $fn")
@@ -134,11 +183,23 @@ case class chSess(sess : Connection, taskId: Int){
 
     _ <- ZIO.logInfo(s"insQuer = $insQuer")
 
+
+    _ <- ZIO.attemptBlockingInterrupt {
+      sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
+      sess.createStatement.executeQuery(createScript)
+    }.ensuring(
+      ZIO.logError("End of the blocking operation in recreateTableCopyData - drop/create.")
+    ).catchAll {
+      case e: Exception =>
+        ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+    }.when(maxValCnt.isEmpty && maxValCnt.map(_.CntRows).getOrElse(0L)==0L)
+
     /**todo: replace with attemptBlockingCancelable or attemptBlockingInterrupt
     */
     rows <- ZIO.attemptBlockingInterrupt {
-      sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
-      sess.createStatement.executeQuery(createScript)
+      //sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
+      //sess.createStatement.executeQuery(createScript)
 
       //------------------------------------
       val ps: PreparedStatement = sess.prepareStatement(insQuer)
@@ -204,11 +265,11 @@ case class chSess(sess : Connection, taskId: Int){
 
       val rsRowCount = sess.createStatement.executeQuery(s"select sum(1) as cnt from ${table.schema}.${table.name}")
       rsRowCount.next()
-      val rowCount = rsRowCount.getInt(1)
-      rowCount
+      val rowCount = rsRowCount.getLong(1)
+      rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
 
     }.ensuring(
-      ZIO.logError("End of the blocking operation [attemptBlockingInterrupt] in recreateTableCopyData.")
+        ZIO.logError("End of the blocking operation in recreateTableCopyData - batch inserts.")
     ).catchAll {
       case e: Exception =>
         ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>

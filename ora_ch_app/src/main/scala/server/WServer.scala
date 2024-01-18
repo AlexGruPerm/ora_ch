@@ -2,6 +2,7 @@ package server
 
 
 import clickhouse.{chSess, jdbcChSession, jdbcChSessionImpl}
+import common.Types.MaxValAndCnt
 import conf.OraServer
 import error.ResponseMessage
 import ora.{jdbcSession, jdbcSessionImpl, oraSess}
@@ -31,10 +32,10 @@ object WServer {
       tables = t)
   } yield (wstask,sess)
 
-  private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess): ZIO[Any,Nothing,Unit] = for {
+  private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess, maxValCnt: Option[MaxValAndCnt]): ZIO[Any,Nothing,Unit] = for {
     copiedRows <- ch.getCountCopiedRows(table)
     //_ <- ZIO.logInfo(s"updatedCopiedRowsCount copiedRows=$copiedRows ..............................")
-    _ <- ora.updateCountCopiedRows(table,copiedRows)
+    _ <- ora.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
   } yield ()
 
   private def startTask(sess: oraSess): ZIO[ImplTaskRepo with jdbcChSession, Throwable, Unit] = for {
@@ -56,17 +57,44 @@ object WServer {
     fetch_size = task.oraServer.map(_.fetch_size).getOrElse(1000)
     batch_size = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
 
+    copyEffects = task.tables.map { table =>
+      sess.setTableBeginCopy(table) *>
+        sessCh.getMaxColForSync(table).flatMap { maxValAndCnt =>
+            updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt).repeat(Schedule.spaced(5.second)).fork *>
+            sessCh.recreateTableCopyData(
+                table,
+                sess.getDataResultSet(table, fetch_size, maxValAndCnt),
+                batch_size,
+                maxValAndCnt)
+              .flatMap {
+                rc => sess.setTableCopied(table, rc)
+              }
+          }
+          .onInterrupt {
+            ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing") *>
+              sess.closeConnection
+          }
+    }
+    /*
     copyEffects = task.tables.map{table =>
       sess.setTableBeginCopy(table) *>
-        updatedCopiedRowsCount(table,sess,sessCh)
-          .repeat(Schedule.spaced(5.second)).fork *>
-             sessCh.recreateTableCopyData(table, sess.getDataResultSet(table, fetch_size), batch_size).flatMap {
-              rc => sess.setTableCopied(table, rc)
-            }.onInterrupt{
+        updatedCopiedRowsCount(table,sess,sessCh).repeat(Schedule.spaced(5.second)).fork *>
+            sessCh.getMaxColForSync(table).flatMap{maxValAndCnt =>
+                sessCh.recreateTableCopyData(
+                    table,
+                    sess.getDataResultSet(table, fetch_size, maxValAndCnt),
+                    batch_size,
+                    maxValAndCnt)
+                  .flatMap {
+                  rc => sess.setTableCopied(table, rc)
+                }
+            }
+            .onInterrupt{
                ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing") *>
                  sess.closeConnection
              }
     }
+    */
     _ <- ZIO.collectAll(copyEffects) //todo: ZIO.collectAllPar(copyEffects).withParallelism(par_degree)
     _ <- sess.taskFinished
     _ <- sess.closeConnection

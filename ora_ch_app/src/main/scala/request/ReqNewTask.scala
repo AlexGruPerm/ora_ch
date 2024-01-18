@@ -6,9 +6,12 @@ import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 case class OneTable(name: String,
                     plsql_context_date: Option[String] = Option.empty[String],
                     pk_columns: Option[String] = Option.empty[String],
+                    only_columns: Option[List[String]] = Option.empty[List[String]],
                     ins_select_order_by: Option[String] = Option.empty[String],
                     partition_by: Option[String] = Option.empty[String],
-                    notnull_columns: Option[List[String]] = Option.empty[List[String]]
+                    notnull_columns: Option[List[String]] = Option.empty[List[String]],
+                    where_filter: Option[String] = Option.empty[String],
+                    sync_by_column_max: Option[String] = Option.empty[String]
                    )
 
 case class SrcTable(schema: String, tables: List[OneTable] = List.empty[OneTable])

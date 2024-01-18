@@ -9,23 +9,51 @@ import table.{ExtPrimaryKey, KeyType, PrimaryKey, RnKey, Table, UniqueKey}
 
 import java.sql.{Connection, DriverManager, ResultSet, Statement}
 import java.util.Properties
+import common.Types._
 
 
 case class oraSess(sess : Connection, taskId: Int){
 
-  def getDataResultSet(table: Table, fetch_size: Int): ZIO[Any, Exception, ResultSet] = for {
+  def getDataResultSet(table: Table, fetch_size: Int, maxColCh: Option[MaxValAndCnt]): ZIO[Any, Exception, ResultSet] = for {
     _ <- ZIO.unit
     rsEffect = ZIO.attemptBlocking {
       val dataQuery =
         table.keyType match {
-          case ExtPrimaryKey => s"select * from ${table.schema}.${table.name}"
-          case PrimaryKey | UniqueKey => s"select * from ${table.schema}.${table.name}" //todo: REMOVE where rownum <= 3000
-          case RnKey => s"select row_number() over(order by null) as rn,t.* from ${table.schema}.${table.name} t" //todo: REMOVE where rownum <= 3000
+          case ExtPrimaryKey =>
+            s"""select ${table.only_columns.getOrElse(List("*")).mkString(",")} from ${table.schema}.${table.name} ${
+                table.where_filter match {
+                  case Some(where) => table.sync_by_column_max match
+                   {case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                    case None =>  s" where $where"
+                   }
+                  case None => " "
+                }
+            }"""
+          case PrimaryKey | UniqueKey =>
+            s"""select ${table.only_columns.getOrElse(List("*")).mkString(",")} from ${table.schema}.${table.name} ${
+              table.where_filter match {
+                case Some(where) => table.sync_by_column_max match {
+                  case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                  case None => s" where $where"
+                }
+                case None => " "
+              }
+            }""".stripMargin
+          case RnKey =>
+            s"""select row_number() over(order by null) as rn,t.* from (
+               |select ${table.only_columns.getOrElse(List("*")).mkString(",")} from ${table.schema}.${table.name} ${
+              table.where_filter match {
+                case Some(where) => table.sync_by_column_max match {
+                  case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                  case None => s" where $where"
+                }
+                case None => " "
+              }
+            }) t """.stripMargin
         }
       //********************* CONTEXT *************************
       val ctxDate: String = table.plsql_context_date.getOrElse(" ")
       if (table.plsql_context_date.nonEmpty){
-        //execute immediate 'ALTER SESSION SET nls_length_semantics = BYTE';
       val contextSql =
         s"""
           | begin
@@ -41,6 +69,7 @@ case class oraSess(sess : Connection, taskId: Int){
         case Some(order_by) => s"$dataQuery order by $order_by"
         case None => dataQuery
       }
+      println(s"dateQueryWithOrd = $dateQueryWithOrd")
       val dataRs = sess.createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY,ResultSet.CONCUR_READ_ONLY)
         .executeQuery(dateQueryWithOrd)
       dataRs.setFetchSize(fetch_size)
@@ -95,9 +124,9 @@ case class oraSess(sess : Connection, taskId: Int){
           s""" update ora_to_ch_tasks_tables t
              |   set  begin_datetime = sysdate,
              |        state  = 'copying'
-             | where t.id_task=$taskId and
-             |       t.schema_name='${table.schema}' and
-             |       t.table_name='${table.name}' """.stripMargin
+             | where t.id_task     = $taskId and
+             |       t.schema_name = '${table.schema}' and
+             |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         rs.next() //todo: ??? maybe remove
         sess.commit()
@@ -108,7 +137,7 @@ case class oraSess(sess : Connection, taskId: Int){
       }
   } yield ()
 
-  def updateCountCopiedRows(table: Table, rowCount: Int): ZIO[Any, Nothing, Unit] = for {
+  def updateCountCopiedRows(table: Table, rowCount: Long): ZIO[Any, Nothing, Unit] = for {
     taskId <- getTaskIdFromSess.catchAll {
       _: Exception => ZIO.succeed(0)
     }
@@ -137,7 +166,7 @@ case class oraSess(sess : Connection, taskId: Int){
         }
   } yield ()
 
-  def setTableCopied(table: Table, rowCount: Int): ZIO[Any, Exception, Unit] = for {
+  def setTableCopied(table: Table, rowCount: Long): ZIO[Any, Exception, Unit] = for {
     taskId <- getTaskIdFromSess
     _ <-
       ZIO.attemptBlocking {
@@ -265,41 +294,36 @@ case class oraSess(sess : Connection, taskId: Int){
     _ <- ZIO.logInfo(s" For $schema.$tableName KEY = ${key._1} - ${key._2}")
   } yield key
 
-  def getTable(schema: String,
-               tableName: String,
-               plsql_context_date: Option[String],
-               pk_columns: Option[String],
-               ins_select_order_by: Option[String],
-               partition_by: Option[String],
-               notnull_columns: Option[List[String]]
-              ): ZIO[Any, Exception, Table] = for {
-    kt <- pk_columns match {
-      case Some(ext_pk_cols) => ZIO.succeed((ExtPrimaryKey,ext_pk_cols))
+  def getPk(schema: String,
+            tableName: String,
+            pk_columns: Option[String]): ZIO[Any, Exception, (KeyType,String)] = for {
+    ktc <- pk_columns match {
+      case Some(ext_pk_cols) => ZIO.succeed((ExtPrimaryKey, ext_pk_cols))
       case None => getKeyType(schema, tableName)
     }
-  } yield Table(schema, tableName, kt._1, kt._2, plsql_context_date, pk_columns, ins_select_order_by, partition_by, notnull_columns)
+  } yield ktc
 
-  def getTables(stables: List[SrcTable]): ZIO[Any, Exception, List[Table]] = {
-    //todo: refactor tuple
-    val schTbl: List[(String, String, Option[String], Option[String], Option[String], Option[String], Option[List[String]])] =
+  def getTables(stables: List[SrcTable]): ZIO[Any, Exception, List[Table]] =
+    ZIO.collectAll {
       stables.flatMap { st =>
-      st.tables.map(ot =>
-        (st.schema, ot.name, ot.plsql_context_date, ot.pk_columns, ot.ins_select_order_by, ot.partition_by, ot.notnull_columns))
-    }
-
-    val res: List[ZIO[Any, Exception, Table]] =
-      for {
-        t <- schTbl
-      } yield getTable(t._1, t._2, t._3, t._4, t._5, t._6, t._7) //todo: refactor tuple
-
-    val outTables = for {
-      values <- ZIO.collectAll {
-        res
+        st.tables.map{ot =>
+          getPk(st.schema,ot.name,ot.pk_columns).map{
+            case (kt: KeyType,kc: String) =>
+              Table(
+                st.schema, ot.name,
+                kt, kc,
+                ot.plsql_context_date,
+                ot.pk_columns,
+                ot.only_columns,
+                ot.ins_select_order_by,
+                ot.partition_by,
+                ot.notnull_columns,
+                ot.where_filter,
+                ot.sync_by_column_max)
+          }
+        }
       }
-    } yield values
-
-    outTables
-  }
+    }
 
   def getTaskIdFromSess: ZIO[Any, Exception, Int] = ZIO.succeed(taskId)
 

@@ -1,19 +1,9 @@
-drop table data.eaist_lot;
-
-create table data.eaist_lot
-(
-   id             UInt64,
-   registrynumber FixedString(19),
-   tendersubject  FixedString(2048),
-   lotnumber      Decimal64(6),
-   publicdate     Nullable(DateTime),
-   lotprice       Decimal64(6),
-   finishdate     Nullable(DateTime),
-   update_time    Nullable(DateTime),
-   membercount    Decimal64(6),
-
-)ENGINE = MergeTree()
-PRIMARY KEY (id);
+select if(exists(
+				select 1
+				from   system.tables t
+				where  t.database='msk_arm_v2' and
+				       t.name='eaist_v_contract'
+                ),1,0) as is_table_exists;
 
 select s.sid,s.PROGRAM,s.MODULE,s.ACTION
 from v$session s
