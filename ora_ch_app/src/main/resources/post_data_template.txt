@@ -1,35 +1,6 @@
-{
- "servers":{
-   "oracle":{
-     "ip" : "10.206.161.9",
-     "port": 1521,
-     "tnsname" : "nsser",
-     "fetch_size" : 5000,
-     "user" : "dbadmin",
-     "password" : "dbadmin"
-   },
-   "clickhouse":{
-     "ip": "192.168.56.100",
-     "port": 8123,
-     "db" : "default",
-     "batch_size" : 10000,
-     "user" : "admin",
-     "password" : "admin"
-   },
-   "config":{
-     "mode":"sequentially"
-   }
- },
-   "schemas":[
-     {"schema":"msk_analytics_caches",
-     "tables":[
-       {"name":"cache_for_calc_12904_11487"}
-     ]}
-   ]
-}
 
-
-{
+--Первичная загрузка:
+nohup curl -X POST http://localhost:8081/task -H 'Content-Type: application/json' -d '{
  "servers":{
    "oracle":{
      "ip" : "10.206.161.9",
@@ -40,7 +11,7 @@
      "password" : "dbadmin"
    },
    "clickhouse":{
-     "ip": "192.168.56.100",
+     "ip": "10.206.215.9",
      "port": 8123,
      "db" : "default",
      "batch_size" : 20000,
@@ -52,29 +23,36 @@
    }
  },
    "schemas":[
-     {"schema":"msk_analytics_caches",
+     {"schema":"msk_arm_v2",
      "tables":[
-       {"name":"cache_for_calc_12904_11487"}
+               {"name":"eaist_v_contract",
+                "pk_columns":"date_start,date_end,id",
+                "only_columns":["date_start","date_end","id"],
+                "ins_select_order_by":"date_start,date_end,id",
+                "partition_by":"toYear(date_start),toYear(date_end)",
+                "notnull_columns":["id","date_start","date_end"],
+                "where_filter":" date_start is not null and date_end is not null "
+               }
      ]}
    ]
-}
+}' > out_curl.log 2>&1 </dev/null &
 
-
-{
+--Подгрузка новых данных по id(ora) > max(id)(ch)
+nohup curl -X POST http://localhost:8081/task -H 'Content-Type: application/json' -d '{
  "servers":{
    "oracle":{
-     "ip" : "10.206.161.2",
+     "ip" : "10.206.161.9",
      "port": 1521,
-     "tnsname" : "test",
-     "fetch_size" : 1000,
+     "tnsname" : "nsser",
+     "fetch_size" : 10000,
      "user" : "dbadmin",
      "password" : "dbadmin"
    },
    "clickhouse":{
-     "ip": "192.168.56.100",
+     "ip": "10.206.215.9",
      "port": 8123,
      "db" : "default",
-     "batch_size" : 2000,
+     "batch_size" : 20000,
      "user" : "admin",
      "password" : "admin"
    },
@@ -85,97 +63,103 @@
    "schemas":[
      {"schema":"msk_arm_v2",
      "tables":[
-       {"name":"eaist_lot"},
-       {"name":"eaist_contract"},
-       {"name":"eaist_financeplan"}
-     ]
-     },
-     {"schema":"msk_nsi",
-     "tables":[
-       {"name":"d_oiv"},
-       {"name":"d_oiv_type"},
-       {"name":"d_okrug"}
-     ]
-     }
+               {"recreate":0,
+                "name":"eaist_v_contract",
+                "pk_columns":"date_start,date_end,id",
+                "only_columns":["date_start","date_end","id"],
+                "ins_select_order_by":"date_start,date_end,id",
+                "partition_by":"toYear(date_start),toYear(date_end)",
+                "notnull_columns":["id","date_start","date_end"],
+                "where_filter":" date_start is not null and date_end is not null ",
+                "sync_by_column_max":"id"
+               }
+     ]}
+   ]
+}' > out_curl.log 2>&1 </dev/null &
 
++ "recreate":1 -- table is clickhouse will be droped and created.
+  "recreate":0 -- only new data will be inserted in clickhouse table.
 
-
-
-
-
-{
+nohup curl -X POST http://localhost:8081/task -H 'Content-Type: application/json' -d '{
  "servers":{
    "oracle":{
-     "ip" : "192.168.1.1",
+     "ip" : "10.206.161.9",
      "port": 1521,
-     "tnsname" : "test",
-     "fetch_size" : 1000,
+     "tnsname" : "nsser",
+     "fetch_size" : 10000,
      "user" : "dbadmin",
      "password" : "dbadmin"
    },
    "clickhouse":{
-     "ip": "192.168.1.2",
+     "ip": "10.206.215.9",
      "port": 8123,
-     "batch_size" : 2000,
+     "db" : "default",
+     "batch_size" : 20000,
      "user" : "admin",
      "password" : "admin"
    },
    "config":{
-     "mode":"sequentially",
-     "mode2":"parallel",
-     "degree": 2
+     "mode":"sequentially"
    }
  },
    "schemas":[
      {"schema":"msk_arm_v2",
      "tables":[
-       {"name":"eaist_lot"},
-       {"name":"eaist_contract"},
-       {"name":"eaist_financeplan"}
-     ]
-     },
+               {"name":"v_ref_financeplan_data_depfi_v",
+                "plsql_context_date":"20240117",
+                "pk_columns":"id_contract",
+                "ins_select_order_by":"year_bo,data_bo",
+                "partition_by":"year_bo",
+                "notnull_columns":["id_contract","year_bo"]},
+               {"name":"eaist_v_financeplan",
+                "pk_columns":"contract_id",
+                "ins_select_order_by":"contract_id"},
+               {"name":"eaist_v_contract",
+                "pk_columns":"date_start,date_end,id",
+                "only_columns":["date_start","date_end","id"],
+                "ins_select_order_by":"date_start,date_end,id",
+                "partition_by":"toYear(date_start),toYear(date_end)",
+                "notnull_columns":["id","date_start","date_end"],
+                "where_filter":" date_start is not null and date_end is not null "
+               },
+               {"name":"mv_restriction_pd","partition_by":"year","notnull_columns":["year"]},
+               {"name":"mv_spr_w_vr_contr","pk_columns":"code","notnull_columns":["code"]}
+     ]},
      {"schema":"msk_nsi",
      "tables":[
-       {"name":"d_oiv"},
-       {"name":"d_oiv_type"},
-       {"name":"d_okrug"}
-     ]
+               {"name":"d_expense_article","pk_columns":"s_code","notnull_columns":["s_code"]},
+               {"name":"d_oiv"},
+               {"name":"d_expense_section","pk_columns":"s_code","notnull_columns":["s_code"]},
+               {"name":"d_expense_kind","pk_columns":"s_code","notnull_columns":["s_code"]},
+               {"name":"d_expense_kosgu","pk_columns":"s_code","notnull_columns":["s_code"]}
+             ]
+     },
+     {"schema":"msk_analytics",
+     "tables":[
+               {"name":"v_gp_kbk_un",
+                "plsql_context_date":"20240117",
+                "pk_columns":"cur_year,n_year,id_budget_type",
+                "ins_select_order_by":"cur_year,n_year,id_budget_type",
+                "partition_by":"cur_year,n_year,id_budget_type",
+                "notnull_columns":["cur_year","n_year","id_budget_type"]}
+              ]
+     },
+     {"schema":"msk_analytics_caches",
+      "tables":[
+                {"name":"cache_for_calc_12904_11487",
+                 "pk_columns":"datecalc_cache,date_cache,type_info",
+                 "ins_select_order_by":"datecalc_cache,date_cache,type_info",
+                 "partition_by":"datecalc_cache,date_cache",
+                 "notnull_columns":["datecalc_cache","date_cache","type_info"]},
+                {"name":"cache_for_calc_12044_10407",
+                 "pk_columns":"datecalc_cache,date_cache",
+                 "ins_select_order_by":"datecalc_cache,date_cache",
+                 "partition_by":"datecalc_cache,date_cache",
+                 "notnull_columns":["datecalc_cache","date_cache"]}
+               ]
      }
    ]
-}
-
-   "tables":[
-       {"schema":"msk_arm_v2","name":"eaist_lot"},
-       {"schema":"msk_arm_v2","name":"eaist_contract"},
-       {"schema":"msk_arm_v2","name":"eaist_financeplan"},
-       {"schema":"msk_nsi","name":"d_oiv"},
-       {"schema":"msk_nsi","name":"d_oiv_type"},
-       {"schema":"msk_nsi","name":"d_okrug"}
-     ]
-
-
-clear;
-
-drop table ora_to_ch_tasks;
-drop sequence s_ora_to_ch_tasks;
-
-create sequence s_ora_to_ch_tasks
-minvalue 1
-maxvalue 9999999999999999999999999999
-start with 1
-increment by 1
-nocache;
-
-create table ora_to_ch_tasks(
- id integer not null
-);
-
-select s.sid,s.PROGRAM,s.MODULE,s.ACTION
-from v$session s
-where s.OSUSER='yakushev' and
-      s.MODULE='ORATOCH'
-
-
+}' > out_curl.log 2>&1 </dev/null &
 
 
 

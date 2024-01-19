@@ -7,6 +7,8 @@ import zio.http._
 
 object MainApp extends ZIOAppDefault {
 
+  //TODO: change logInfo to logDebug somewhere
+
   override def run: ZIO[Any,Throwable,Nothing] =
     (Server.install(WServer.app).flatMap { port =>
       Console.printLine(s"Started server on port: $port")

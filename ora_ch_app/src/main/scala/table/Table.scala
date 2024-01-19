@@ -4,6 +4,7 @@ package table
  * Table or view
  */
 case class Table(schema: String,
+                 recreate: Int,
                  name: String,
                  keyType: KeyType,
                  keyColumns: String,

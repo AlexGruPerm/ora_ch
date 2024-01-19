@@ -1,5 +1,6 @@
 package ora
 
+import calc.{VQParams, ViewQueryMeta}
 import zio.{Task, _}
 import conf.OraServer
 import jdk.internal.org.jline.utils.ShutdownHooks.Task
@@ -7,7 +8,7 @@ import oracle.jdbc.OracleDriver
 import request.SrcTable
 import table.{ExtPrimaryKey, KeyType, PrimaryKey, RnKey, Table, UniqueKey}
 
-import java.sql.{Connection, DriverManager, ResultSet, Statement}
+import java.sql.{Clob, Connection, DriverManager, ResultSet, Statement}
 import java.util.Properties
 import common.Types._
 
@@ -294,6 +295,64 @@ case class oraSess(sess : Connection, taskId: Int){
     _ <- ZIO.logInfo(s" For $schema.$tableName KEY = ${key._1} - ${key._2}")
   } yield key
 
+
+  def getVqMeta(vqId: Int): ZIO[Any, Exception, ViewQueryMeta] = for {
+    _ <- ZIO.unit
+    vqMetaEffect = ZIO.attemptBlockingInterrupt {
+      val queryVq =
+        s""" select vq.view_name,vq.ch_table,vq.ora_table,vq.query_text
+           |  from ora_to_ch_views_query vq
+           | where vq.id = $vqId """.stripMargin
+      val rsVq: ResultSet = sess.createStatement.executeQuery(queryVq)
+      rsVq.next()
+
+      val queryParams =
+        s""" select p.param_name,p.param_type,p.param_order
+           |  from ora_to_ch_vq_params p
+           | where p.id_vq = $vqId """.stripMargin
+      val rsParams: ResultSet = sess.createStatement.executeQuery(queryParams)
+      val vqParams: Set[VQParams] = Iterator.continually(rsParams).takeWhile(_.next()).map { rs =>
+        VQParams(
+          rs.getString("param_name"),
+          rs.getString("param_type"),
+          rs.getInt("param_order")
+        )
+      }.toSet
+
+      val vName: String = rsVq.getString("view_name")
+      val isNameNull: Boolean = rsVq.wasNull()
+      val optVName: Option[String] =
+        if (isNameNull)
+          None
+        else
+          Some(vName)
+
+      val queryClob: Clob = rsVq.getClob("query_text")
+      val isNull: Boolean = rsVq.wasNull()
+      val optQueryStr: Option[String] =
+        if (isNull)
+          None
+        else
+          Some(queryClob.getSubString(1,queryClob.length().toInt))
+
+      val vqm = ViewQueryMeta(
+        optVName,
+        rsVq.getString("ch_table"),
+        rsVq.getString("ora_table"),
+        optQueryStr,
+        vqParams
+      )
+      rsVq.close()
+      rsParams.close()
+      vqm
+    }.catchAll {
+      case e: Exception => ZIO.logError(s"getVqMeta - ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+    vqMeta <- vqMetaEffect
+  } yield vqMeta
+
+
   def getPk(schema: String,
             tableName: String,
             pk_columns: Option[String]): ZIO[Any, Exception, (KeyType,String)] = for {
@@ -310,7 +369,8 @@ case class oraSess(sess : Connection, taskId: Int){
           getPk(st.schema,ot.name,ot.pk_columns).map{
             case (kt: KeyType,kc: String) =>
               Table(
-                st.schema, ot.name,
+                st.schema,
+                ot.recreate,ot.name,
                 kt, kc,
                 ot.plsql_context_date,
                 ot.pk_columns,

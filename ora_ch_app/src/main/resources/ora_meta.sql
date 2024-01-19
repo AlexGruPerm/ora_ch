@@ -32,13 +32,7 @@ create table ora_to_ch_tasks_tables(
  constraint uk_ora_to_ch_tasks_tables unique(id_task,schema_name,table_name)
 );
 
-select t.*,t.rowid from ora_to_ch_tasks t order by t.id desc;
 
-select tb.*,tb.rowid from ora_to_ch_tasks_tables tb where tb.id_task = (select max(t.id) from ora_to_ch_tasks t)
 
-select tb.schema_name||'.'||tb.table_name as tbl,
-       tb.begin_datetime,
-       tb.end_datetime,
-       round((tb.end_datetime-tb.begin_datetime)*24*60) as durr_min
-from ora_to_ch_tasks_tables tb
-where tb.id_task = 134
+
+

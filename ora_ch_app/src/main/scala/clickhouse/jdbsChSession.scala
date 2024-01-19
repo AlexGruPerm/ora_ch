@@ -188,19 +188,16 @@ case class chSess(sess : Connection, taskId: Int){
       sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
       sess.createStatement.executeQuery(createScript)
     }.ensuring(
-      ZIO.logError("End of the blocking operation in recreateTableCopyData - drop/create.")
+      ZIO.logInfo("End of the blocking operation in recreateTableCopyData - drop/create.")
     ).catchAll {
       case e: Exception =>
         ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
-    }.when(maxValCnt.isEmpty && maxValCnt.map(_.CntRows).getOrElse(0L)==0L)
+    }.when(table.recreate==1 || (maxValCnt.isEmpty && maxValCnt.map(_.CntRows).getOrElse(0L)==0L))
 
     /**todo: replace with attemptBlockingCancelable or attemptBlockingInterrupt
     */
     rows <- ZIO.attemptBlockingInterrupt {
-      //sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
-      //sess.createStatement.executeQuery(createScript)
-
       //------------------------------------
       val ps: PreparedStatement = sess.prepareStatement(insQuer)
 
@@ -269,7 +266,7 @@ case class chSess(sess : Connection, taskId: Int){
       rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
 
     }.ensuring(
-        ZIO.logError("End of the blocking operation in recreateTableCopyData - batch inserts.")
+        ZIO.logInfo("End of the blocking operation in recreateTableCopyData - batch inserts.")
     ).catchAll {
       case e: Exception =>
         ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>

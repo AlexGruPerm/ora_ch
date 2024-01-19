@@ -3,7 +3,8 @@ package request
 import conf.{ClickhouseServer, Mode, ModeType, OraServer, Parallel, Sequentially}
 import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
-case class OneTable(name: String,
+case class OneTable(recreate: Int,
+                    name: String,
                     plsql_context_date: Option[String] = Option.empty[String],
                     pk_columns: Option[String] = Option.empty[String],
                     only_columns: Option[List[String]] = Option.empty[List[String]],

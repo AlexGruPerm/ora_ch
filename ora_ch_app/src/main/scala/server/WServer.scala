@@ -1,6 +1,7 @@
 package server
 
 
+import calc.{CalcLogic, ReqCalc}
 import clickhouse.{chSess, jdbcChSession, jdbcChSessionImpl}
 import common.Types.MaxValAndCnt
 import conf.OraServer
@@ -10,9 +11,11 @@ import request.{ReqNewTask, SrcTable}
 import task.{Executing, ImplTaskRepo, Ready, TaskState, Wait, WsTask}
 import zio.{ZIO, _}
 import zio.http.{handler, _}
-import zio.json.{DecoderOps, EncoderOps}
+import zio.json.{DecoderOps, EncoderOps, JsonDecoder}
 import request.EncDecReqNewTaskImplicits._
+import calc.EncDecReqCalcImplicits._
 import table.Table
+import zio.json.JsonDecoder.fromCodec
 
 import java.io.IOException
 import scala.collection.immutable.List
@@ -100,11 +103,25 @@ object WServer {
     _ <- sess.closeConnection
   } yield ()
 
+  private def requestToEntity[A](r: Request)(implicit decoder: JsonDecoder[A]): ZIO[Any, Nothing, Either[String, A]] = for {
+    req <- r.body.asString.map(_.fromJson[A])
+      .catchAllDefect {
+        case e: Exception => ZIO.logError(s"Error[3] parsing input file with calc : ${e.getMessage}") *>
+          ZIO.succeed(Left(e.getMessage))
+      }
+      .catchAll {
+        case e: Exception => ZIO.logError(s"Error[4] parsing input file with calc : ${e.getMessage}") *>
+          ZIO.succeed(Left(e.getMessage))
+      }
+  } yield req
+
   private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
     bodyText <- req.body.asString
      _ <- ZIO.logInfo(s"task body = $bodyText")
 
-    u <- req.body.asString.map(_.fromJson[ReqNewTask])
+    u <- requestToEntity[ReqNewTask](req)
+
+/*    u <- req.body.asString.map(_.fromJson[ReqNewTask])
       .catchAllDefect {
         case e: Exception => ZIO.logError(s"oratoch-1 error parsing input file with task : ${e.getMessage}") *>
           ZIO.succeed(Left(e.getMessage))
@@ -112,7 +129,7 @@ object WServer {
       .catchAll {
         case e: Exception => ZIO.logError(s"oratoch-2 error parsing input file with task : ${e.getMessage}") *>
           ZIO.succeed(Left(e.getMessage))
-      }
+      }*/
 
     _ <- ZIO.logInfo("~~~~~~~~~~~~~~~~~~")
     _ <- ZIO.logInfo(s"JSON = $u")
@@ -142,6 +159,29 @@ object WServer {
      // resp =  Response.html(s"HTML: $bodyText", Status.Ok)
   } yield resp
 
+  private def calcCopy(reqCalc: ReqCalc): ZIO[ImplTaskRepo, Throwable, Response] = for {
+    _ <- ZIO.unit
+    calc = CalcLogic.startCalculation(reqCalc).onInterrupt(CalcLogic.debugInterruption("calc"))
+    copy = CalcLogic.copyDataChOra(reqCalc).onInterrupt(CalcLogic.debugInterruption("copy"))
+    layers = (ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer) ++
+      (ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer)
+    _ <- (calc *> copy).provideLayer(layers).forkDaemon
+  } yield Response.json(s"""{"calcid": "${reqCalc.view_query_id}"}""").status(Status.Ok)
+
+  private def calc(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
+    bodyText <- req.body.asString
+    _ <- ZIO.logInfo(s"calc body = $bodyText")
+    reqCalcE <- requestToEntity[ReqCalc](req)
+    _ <- ZIO.logInfo(s"JSON = $reqCalcE")
+
+    resp <- reqCalcE match {
+      case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
+      case Right(reqCalc) => calcCopy(reqCalc)
+    }
+
+  } yield resp
+
+
   private def getMainPage: ZIO[Any, IOException, Response] =
     ZIO.fail(new IOException("error text in IOException"))
 /*    for {
@@ -164,6 +204,7 @@ object WServer {
 
   private val routes = Routes(
     Method.POST / "task"  -> handler{(req: Request) => catchCover(task(req))},
+    Method.POST / "calc"  -> handler{(req: Request) => catchCover(calc(req))},
     Method.GET / "random" -> handler(Random.nextString(10).map(Response.text(_))),
     Method.GET / "utc"    -> handler(Clock.currentDateTime.map(s => Response.text(s.toString))),
     Method.GET / "main"   -> handler(catchCover(getMainPage)),
