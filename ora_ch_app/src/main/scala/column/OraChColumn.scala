@@ -35,16 +35,6 @@ object OraChColumn {
             isNullable: Int,
             notnull_columns: List[String]): OraChColumn = {
 
-/*    val nnLeftSide: String =
-      if (isNullable == 1 && name.toLowerCase!="rn" && !notnull_columns.map(_.toLowerCase).contains(name.toLowerCase))
-        "Nullable("
-      else ""
-
-    val nnRightSide: String =
-      if (isNullable == 1 && name.toLowerCase!="rn" && !notnull_columns.map(_.toLowerCase).contains(name.toLowerCase))
-        ")"
-      else ""*/
-
     val (nnLeftSide,nnRightSide) =
       if (isNullable == 1 && name.toLowerCase != "rn" && !notnull_columns.map(_.toLowerCase).contains(name.toLowerCase))
       ("Nullable(",")")

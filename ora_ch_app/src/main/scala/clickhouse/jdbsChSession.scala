@@ -1,5 +1,6 @@
 package clickhouse
 
+import calc.{CalcParams, ViewQueryMeta}
 import column.OraChColumn
 import com.clickhouse.client.config.ClickHouseClientOption
 import com.clickhouse.client.http.config.HttpConnectionProvider
@@ -12,7 +13,6 @@ import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, Types}
 import java.time.{LocalDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
-
 import common.Types._
 
 case class chSess(sess : Connection, taskId: Int){
@@ -277,8 +277,6 @@ case class chSess(sess : Connection, taskId: Int){
 
   } yield rows
 
-
-
   def createDatabases(schemas: Set[String]): ZIO[Any, Exception, Unit] = for {
     _ <- ZIO.unit
     createDbEffs = schemas.map {schema =>
@@ -295,12 +293,56 @@ case class chSess(sess : Connection, taskId: Int){
     _ <- ZIO.collectAll(createDbEffs)
   } yield ()
 
+  def truncateTable(tableName: String): ZIO[Any, Exception, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt{
+      val rs: ResultSet = sess.createStatement.
+        executeQuery(s"truncate table msk_analytics_caches.$tableName")
+      rs.close()
+    }.catchAll {
+        case e: Exception => ZIO.logError(s"truncateTable - ${e.getMessage}") *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+        }
+  } yield ()
+
+  def getChTableResultSet(tableName: String): ZIO[Any,Exception,ResultSet] = for {
+    rs <- ZIO.attemptBlockingInterrupt {
+      val selectQuery: String = s"select * from msk_analytics_caches.$tableName"
+      println(s"getChTableResultSet selectQuery = $selectQuery")
+      sess.createStatement.executeQuery(selectQuery)
+    }.catchAll {
+      case e: Exception => ZIO.logError(s"getChTableResultSet exception : ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield rs
+
+  def insertFromQuery(meta: ViewQueryMeta, calcParams: Set[CalcParams]): ZIO[Any, Exception, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt {
+      val mapCalcParams: Map[String,String] = calcParams.iterator.map(p => p.name -> p.value).toMap
+      val strQuery: String = meta.query.getOrElse(" ")
+      val selectQuery: String = meta.params.toList.sortBy(_.ord).foldLeft(strQuery){
+        case (r,c) =>
+          c.chType match {
+            case "Decimal(38,6)" => r.replace(c.name, mapCalcParams.getOrElse(c.name,"******"))
+            case "String" => r.replace(c.name, s"'${mapCalcParams.getOrElse(c.name,"******")}'")
+            case "UInt32" => r.replace(c.name, mapCalcParams.getOrElse(c.name,"******"))
+          }
+      }
+      val insQuery: String = s"insert into msk_analytics_caches.${meta.chTable} $selectQuery"
+      println(s"QUERY WITH BINDS: $insQuery")
+      val rs: ResultSet = sess.createStatement.executeQuery(insQuery)
+      rs.close()
+    }.catchAll {
+      case e: Exception => ZIO.logError(s"insertFromQuery exception : ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield ()
+
 }
 
 trait jdbcChSession {
   def sess(taskId: Int): ZIO[Any,Exception,chSess]
   val props = new Properties()
-  def chConnection(taskId: Int): ZIO[Any,Exception,chSess]
+  def chConnection(taskId: Int): ZIO[Any,Exception,chSess] //todo: remove or private, for user only sess
 }
 
 case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
@@ -316,6 +358,7 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
     _ <- ZIO.logInfo(s" = [${props.getProperty("")}]")
   } yield session
 
+  //todo: private
   override def chConnection(taskId: Int): ZIO[Any, Exception, chSess] = for {
     _ <- ZIO.unit
     sessEffect = ZIO.attemptBlocking {

@@ -1,6 +1,7 @@
 package server
 
 
+import calc.CalcLogic.getCalcMeta
 import calc.{CalcLogic, ReqCalc}
 import clickhouse.{chSess, jdbcChSession, jdbcChSessionImpl}
 import common.Types.MaxValAndCnt
@@ -159,12 +160,14 @@ object WServer {
      // resp =  Response.html(s"HTML: $bodyText", Status.Ok)
   } yield resp
 
-  private def calcCopy(reqCalc: ReqCalc): ZIO[ImplTaskRepo, Throwable, Response] = for {
+  private def calcAndCopy(reqCalc: ReqCalc): ZIO[ImplTaskRepo, Throwable, Response] = for {
     _ <- ZIO.unit
-    calc = CalcLogic.startCalculation(reqCalc).onInterrupt(CalcLogic.debugInterruption("calc"))
-    copy = CalcLogic.copyDataChOra(reqCalc).onInterrupt(CalcLogic.debugInterruption("copy"))
-    layers = (ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer) ++
-      (ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer)
+    layerOra = ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer
+    layerCh = ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer
+    meta <- CalcLogic.getCalcMeta(reqCalc).provideLayer(layerOra)
+    calc = CalcLogic.startCalculation(reqCalc,meta).onInterrupt(CalcLogic.debugInterruption("calc"))
+    copy = CalcLogic.copyDataChOra(reqCalc,meta).onInterrupt(CalcLogic.debugInterruption("copy"))
+    layers = layerCh ++ layerOra
     _ <- (calc *> copy).provideLayer(layers).forkDaemon
   } yield Response.json(s"""{"calcid": "${reqCalc.view_query_id}"}""").status(Status.Ok)
 
@@ -173,23 +176,14 @@ object WServer {
     _ <- ZIO.logInfo(s"calc body = $bodyText")
     reqCalcE <- requestToEntity[ReqCalc](req)
     _ <- ZIO.logInfo(s"JSON = $reqCalcE")
-
     resp <- reqCalcE match {
       case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
-      case Right(reqCalc) => calcCopy(reqCalc)
+      case Right(reqCalc) => calcAndCopy(reqCalc)
     }
-
   } yield resp
-
 
   private def getMainPage: ZIO[Any, IOException, Response] =
     ZIO.fail(new IOException("error text in IOException"))
-/*    for {
-      _ <- ZIO.logInfo("getMainPage 1")
-      _ <- ZIO.fail(throw new IOException("error text in IOException"))
-      resp <- ZIO.succeed(Response.html(s"Hello HTML example"))
-      _ <- ZIO.logInfo("getMainPage 2")
-    } yield resp*/
 
   private def ZioResponseMsgBadRequest(message: String): ZIO[Any, Nothing, Response] =
     ZIO.succeed(Response.json(ResponseMessage(message).toJson).status(Status.InternalServerError))

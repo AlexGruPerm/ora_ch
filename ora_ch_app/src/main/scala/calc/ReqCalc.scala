@@ -3,17 +3,12 @@ package calc
 import request.Servers
 import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
-case class CalcParams(
-                      date_cache_1: Int,
-                      datecalc_cache_1: Int,
-                      date_calc_ctr: String,
-                      year_bo: Int,
-                      c_year: Int
-                     )
+case class CalcParams(name: String,
+                      value: String)
 
 case class ReqCalc(servers: Servers,
                    view_query_id: Int,
-                   params: CalcParams
+                   params: Set[CalcParams]
                   )
 
 import request.EncDecReqNewTaskImplicits._

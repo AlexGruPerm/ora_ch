@@ -1,6 +1,7 @@
 package ora
 
 import calc.{VQParams, ViewQueryMeta}
+import column.OraChColumn
 import zio.{Task, _}
 import conf.OraServer
 import jdk.internal.org.jline.utils.ShutdownHooks.Task
@@ -8,9 +9,10 @@ import oracle.jdbc.OracleDriver
 import request.SrcTable
 import table.{ExtPrimaryKey, KeyType, PrimaryKey, RnKey, Table, UniqueKey}
 
-import java.sql.{Clob, Connection, DriverManager, ResultSet, Statement}
+import java.sql.{Clob, Connection, DriverManager, PreparedStatement, ResultSet, Statement}
 import java.util.Properties
 import common.Types._
+import OraChColumn._
 
 
 case class oraSess(sess : Connection, taskId: Int){
@@ -209,21 +211,93 @@ case class oraSess(sess : Connection, taskId: Int){
           ZIO.fail(new Exception(s"${e.getMessage}"))
       }
   } yield ()
+
+  def getColumnsFromRs(rs: ResultSet) : ZIO[Any,Throwable,List[OraChColumn]] = for {
+/*    _ <- ZIO.logInfo(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    _ <- ZIO.foreachDiscard((1 to rs.getMetaData.getColumnCount)) { i =>
+      ZIO.logInfo(
+        s"""${rs.getMetaData.getColumnName(i).toLowerCase} -
+           |${rs.getMetaData.getColumnTypeName(i)} -
+           |${rs.getMetaData.getColumnClassName(i)} -
+           |${rs.getMetaData.getColumnDisplaySize(i)} -
+           |${rs.getMetaData.getPrecision(i)} -
+           |${rs.getMetaData.getScale(i)}
+           |""".stripMargin)
+    }
+    _ <- ZIO.logInfo(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")*/
+    cols <- ZIO.attemptBlockingInterrupt {
+      (1 to rs.getMetaData.getColumnCount)
+        .map(i =>
+          OraChColumn(
+            rs.getMetaData.getColumnName(i).toLowerCase,
+            rs.getMetaData.getColumnTypeName(i),
+            rs.getMetaData.getColumnClassName(i),
+            rs.getMetaData.getColumnDisplaySize(i),
+            rs.getMetaData.getPrecision(i),
+            rs.getMetaData.getScale(i),
+            rs.getMetaData.isNullable(i),
+            " "
+          )).toList
+    }
+  } yield cols
+
+  def insertRsDataInTable(rs: ResultSet, tableName: String) : ZIO[Any,Exception,Unit] = for {
+    cols <- getColumnsFromRs(rs).catchAll {
+      e: Throwable => ZIO.logError(s"insertRsDataInTable tableName=$tableName exception : ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+    _ <- ZIO.attemptBlockingInterrupt {
+      val batch_size = 1000
+      val fetch_size = 1000
+      val nakedCols = cols.map(chCol => chCol.name).mkString(",")
+      val bindQuests = cols.map(_ => "?").mkString(",")
+      val insQuery: String = s"insert into msk_analytics_caches.$tableName($nakedCols) values($bindQuests)"
+      println(s" insQuery = $insQuery")
+
+      val ps: PreparedStatement = sess.prepareStatement(insQuery)
+      rs.setFetchSize(fetch_size)
+
+      Iterator.continually(rs).takeWhile(_.next()).foldLeft(1) {
+        case (counter, rs) =>
+          cols.foldLeft(1) {
+            case (i, c) =>
+              (c.typeName, c.typeClass, c.precision) match {
+                case ("UInt8"|"UInt16"|"UInt32"|"UInt64",_,_) => ps.setLong(i, rs.getLong(c.name))
+                case (_,"java.math.BigDecimal",_) => ps.setDouble(i, rs.getDouble(c.name))
+                case (_,"java.lang.String",_) => ps.setString(i, rs.getString(c.name))
+              }
+              i + 1
+          }
+          ps.addBatch()
+          if (counter == batch_size) {
+            ps.executeBatch()
+            0
+          } else
+            counter + 1
+      }
+      ps.executeBatch()
+
+      sess.commit()
+      sess.close()
+      rs.close()
+    }.catchAll {
+      case e: Throwable => ZIO.logError(s"insertRsDataInTable tableName=$tableName exception : ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield ()
   
   def closeConnection: ZIO[Any, Nothing, Unit] = for {
     _ <- ZIO.logInfo("Closing Oracle connection")
     _ <- ZIO.attemptBlocking {
         sess.close()
       }.catchAll {
-        case e: Exception => ZIO.logError(s"Closing Oracle connection - ${e.getMessage}").unit //*>
-          //ZIO.fail(new Exception(s"${e.getMessage}"))
+        case e: Exception => ZIO.logError(s"Closing Oracle connection - ${e.getMessage}").unit
       }
   } yield ()
 
   def getPid: Int = {
     val stmt: Statement = sess.createStatement
     val rs: ResultSet = stmt.executeQuery("select sys_context('USERENV','SID') as sid from dual")
-    /*"select distinct sid from v$mystat"*/
     rs.next()
     val pg_backend_pid: Int = rs.getInt("sid")
     pg_backend_pid
