@@ -36,9 +36,9 @@ object WServer {
       tables = t)
   } yield (wstask,sess)
 
-  private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess, maxValCnt: Option[MaxValAndCnt]): ZIO[Any,Nothing,Unit] = for {
+  private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
+  ZIO[Any,Nothing,Unit] = for {
     copiedRows <- ch.getCountCopiedRows(table)
-    //_ <- ZIO.logInfo(s"updatedCopiedRowsCount copiedRows=$copiedRows ..............................")
     _ <- ora.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
   } yield ()
 
@@ -96,7 +96,7 @@ object WServer {
       }
   } yield req
 
-  private def currStatusChecker():ZIO[ImplTaskRepo, Throwable, Unit] = for {
+  private def currStatusChecker(): ZIO[ImplTaskRepo, Throwable, Unit] = for {
     repo <- ZIO.service[ImplTaskRepo]
     currStatus <- repo.getState
     taskId <- repo.getTaskId
@@ -107,39 +107,23 @@ object WServer {
   } yield ()
 
   private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
-    //bodyText <- req.body.asString
     u <- requestToEntity[ReqNewTask](req)
-    resp <- u match {
-      case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
+    response <- u match {
+      case Left(errorString) => ZioResponseMsgBadRequest(errorString)
       case Right(newTask) =>
         for {
-          //todo: put currStatusChecker HERE
-          repo <- ZIO.service[ImplTaskRepo]
-          _ <- currStatusChecker()
-          taskWithOraSess <- createWsTask(newTask).provide(ZLayer.succeed(newTask.servers.oracle), jdbcSessionImpl.layer)
-          wstask = taskWithOraSess._1
-          ora = taskWithOraSess._2
-
-
-/*          currStatus <- tr.getState
-          _ <- ZIO.logInfo(s" TaskRepo currStatus = $currStatus")
-          _ <- currStatusChecker()*/
-
-          _ <- repo.create(wstask)
-          _ <- startTask(ora).provide(ZLayer.succeed(repo),
-                                   ZLayer.succeed(newTask.servers.clickhouse),
-                                   jdbcChSessionImpl.layer).forkDaemon
-          //_ <- fiber.join
-          //todo: RUN PROCESS of coping data here and fork task in separate fiber
+             repo <- ZIO.service[ImplTaskRepo]
+             _ <- currStatusChecker()
+             taskWithOraSess <- createWsTask(newTask).provide(ZLayer.succeed(newTask.servers.oracle), jdbcSessionImpl.layer)
+             wstask = taskWithOraSess._1
+             ora = taskWithOraSess._2
+             _ <- repo.create(wstask)
+             _ <- startTask(ora).provide(ZLayer.succeed(repo),
+                                         ZLayer.succeed(newTask.servers.clickhouse),
+                                         jdbcChSessionImpl.layer).fork
         } yield Response.json(s"""{"taskid": "${wstask.id}"}""").status(Status.Ok)
-/*        .foldZIO(
-          error => ZIO.logError(s"oratoch-3 error parsing input file with task : ${error.getMessage}") *>
-            ZioResponseMsgBadRequest(error.getMessage),
-          success => ZIO.succeed(success)
-        )*/
     }
-     // resp =  Response.html(s"HTML: $bodyText", Status.Ok)
-  } yield resp
+  } yield response
 
   private def calcAndCopy(reqCalc: ReqCalc): ZIO[ImplTaskRepo, Throwable, Response] = for {
     _ <- ZIO.unit
