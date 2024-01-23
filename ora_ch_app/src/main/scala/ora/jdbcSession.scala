@@ -300,6 +300,7 @@ case class oraSess(sess : Connection, taskId: Int){
     val rs: ResultSet = stmt.executeQuery("select sys_context('USERENV','SID') as sid from dual")
     rs.next()
     val pg_backend_pid: Int = rs.getInt("sid")
+    rs.close()
     pg_backend_pid
   }
 
@@ -368,7 +369,6 @@ case class oraSess(sess : Connection, taskId: Int){
     key <- keysEffect
     _ <- ZIO.logInfo(s" For $schema.$tableName KEY = ${key._1} - ${key._2}")
   } yield key
-
 
   def getVqMeta(vqId: Int): ZIO[Any, Exception, ViewQueryMeta] = for {
     _ <- ZIO.unit
@@ -499,13 +499,16 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
         ZIO.fail(new Exception(s"${e.getMessage} - ${ora.getUrl()}"))
     }
 
-    _ <- ZIO.logInfo(s"  ") *>
-      ZIO.logInfo(s"New connection =============== >>>>>>>>>>>>> ")
     sess <- sessEffect
     md = sess.sess.getMetaData
     _ <- ZIO.logInfo(s"Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion}")
-    _ <- ZIO.logInfo(s"oracle session id = ${sess.getPid}")
-
+    sid <- ZIO.attemptBlocking{
+      sess.getPid
+    }.catchAll {
+      case e: Exception => ZIO.logError(s" getPid in pgConnection - ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage} - ${ora.getUrl()}"))
+    }
+    _ <- ZIO.logInfo(s"oracle session id = $sid")
   } yield sess
 
 }

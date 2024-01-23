@@ -53,8 +53,10 @@ ThisBuild / scalaVersion := "2.13.10"
       val zio_http          = "dev.zio" %% "zio-http" % Versions.zio_http
       val zio_json          = "dev.zio" %% "zio-json" % Versions.zio_json
 
+      val orai18n           = "com.oracle.database.nls" % "orai18n" % "23.3.0.23.09"
+
       val zioDep = List(zio, zio_conf, zio_conf_typesafe, zio_conf_magnolia, zio_http, zio_json)
-      val chDep = List(chHttpClient,apacheHttpClient, ch, slf4j, log4j, lz4)
+      val chDep = List(chHttpClient,apacheHttpClient, ch, slf4j, log4j, lz4, orai18n)
     }
 
   val commonDependencies = {
