@@ -15,6 +15,7 @@ import zio.http.{handler, _}
 import zio.json.{DecoderOps, EncoderOps, JsonDecoder}
 import request.EncDecReqNewTaskImplicits._
 import calc.EncDecReqCalcImplicits._
+import server.WServer.startTask
 import table.Table
 import zio.json.JsonDecoder.fromCodec
 
@@ -23,9 +24,25 @@ import scala.collection.immutable.List
 
 object WServer {
 
-  private def createWsTask(newtask: ReqNewTask): ZIO[OraServer with jdbcSession, Throwable, Tuple2[WsTask,oraSess]] = for {
-    jdbc <- ZIO.service[jdbcSession]
-    sess <- jdbc.sess
+/*  private def updatedCopiedRowsCount(table: Table/*,ora: oraSess*/, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
+  ZIO[jdbcSession,Exception,Unit] = for {
+    s <- ZIO.service[jdbcSession] //produce new oracle session for each call
+    sess <- s.sess("updatedCopiedRowsCount")
+    copiedRows <- ch.getCountCopiedRows(table)
+    _ <- sess.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
+  } yield ()*/
+
+  private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
+  ZIO[Any,Nothing,Unit] = for {
+    copiedRows <- ch.getCountCopiedRows(table)
+    _ <- ora.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
+  } yield ()
+
+  private def startTask(newtask: ReqNewTask): ZIO[ImplTaskRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
+    repo <- ZIO.service[ImplTaskRepo]
+    jdbcCh <- ZIO.service[jdbcChSession]
+    oraSess <- ZIO.service[jdbcSession]
+    sess <- oraSess.sess("startTask")
     taskId <- sess.getTaskIdFromSess
     t <- sess.getTables(newtask.schemas)
     wstask = WsTask(id = taskId,
@@ -34,27 +51,20 @@ object WServer {
       clickhouseServer = Some(newtask.servers.clickhouse),
       mode = newtask.servers.config,
       tables = t)
-  } yield (wstask,sess)
-
-  private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
-  ZIO[Any,Nothing,Unit] = for {
-    copiedRows <- ch.getCountCopiedRows(table)
-    _ <- ora.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
-  } yield ()
-
-  private def startTask(sess: oraSess): ZIO[ImplTaskRepo with jdbcChSession, Throwable, Unit] = for {
-    repo <- ZIO.service[ImplTaskRepo]
+    _ <- repo.create(wstask)
     stateBefore <- repo.getState
     _ <- repo.setState(TaskState(Executing))
     stateAfter <- repo.getState
     taskId <- repo.getTaskId
     _ <- ZIO.logInfo(s"[startTask] [${taskId}] State: ${stateBefore} -> ${stateAfter} ")
     taskId <- repo.getTaskId
-    jdbcCh <- ZIO.service[jdbcChSession]
+    _ <- ZIO.logInfo(s"startTask: taskId = $taskId")
     sessCh <- jdbcCh.sess(taskId)
+    _ <- ZIO.logInfo(s"startTask: sessCh Connection isClosed = (${sessCh.sess.isClosed}")
     _ <- ZIO.logInfo(s"[startTask] Clickhouse session taskId = ${sessCh.taskId}")
     task <- repo.ref.get
     setSchemas = task.tables.map(_.schema).toSet diff Set("system","default","information_schema")
+
     _ <- sess.saveTableList(task.tables)
     _ <- sessCh.createDatabases(setSchemas)
     _ <- sess.setTaskState("executing")
@@ -114,14 +124,12 @@ object WServer {
         for {
              repo <- ZIO.service[ImplTaskRepo]
              _ <- currStatusChecker()
-             taskWithOraSess <- createWsTask(newTask).provide(ZLayer.succeed(newTask.servers.oracle), jdbcSessionImpl.layer)
-             wstask = taskWithOraSess._1
-             ora = taskWithOraSess._2
-             _ <- repo.create(wstask)
-             _ <- startTask(ora).provide(ZLayer.succeed(repo),
-                                         ZLayer.succeed(newTask.servers.clickhouse),
-                                         jdbcChSessionImpl.layer).fork
-        } yield Response.json(s"""{"taskid": "${wstask.id}"}""").status(Status.Ok)
+             layerOra = ZLayer.succeed(newTask.servers.oracle) >>> jdbcSessionImpl.layer
+             layerCh = ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer
+             layers = layerOra ++ layerCh ++ ZLayer.succeed(repo)
+             _ <- startTask(newTask).provideLayer(layers).forkDaemon
+             //taskId <- repo.getTaskId //todo: Wait no more then 3 seconds, retry/repeat and return real taskId from repo.
+        } yield Response.json(s"""{"taskid": "ok"}""").status(Status.Ok)
     }
   } yield response
 

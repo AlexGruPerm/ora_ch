@@ -399,7 +399,7 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
     _ <- ZIO.logInfo(s"  ") *>
       ZIO.logInfo(s"New clickhouse connection =============== >>>>>>>>>>>>> ")
     sess <- sessEffect
-
+    _ <- ZIO.logInfo(s"................... just for debug sess.taskId = ${sess.taskId}...................")
   } yield sess
 
 }

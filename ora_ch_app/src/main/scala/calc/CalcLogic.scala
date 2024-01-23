@@ -22,7 +22,7 @@ object CalcLogic {
 
   def getCalcMeta(reqCalc: ReqCalc): ZIO[jdbcSession,Throwable,ViewQueryMeta] = for {
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sess
+    ora <- oraSession.sess("getCalcMeta")
     _ <- ZIO.logInfo(s"getCalcMeta Oracle SID = ${ora.getPid}")
     vqMeta <- ora.getVqMeta(reqCalc.view_query_id)
   } yield vqMeta
@@ -74,7 +74,7 @@ object CalcLogic {
     ch <- chSession.sess(0) //todo: 0 - just for debug, there is no task when we calc.
     chTableRs <- ch.getChTableResultSet(meta.chTable)
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sess
+    ora <- oraSession.sess("copyDataChOra")
     _ <- ora.insertRsDataInTable(chTableRs,meta.oraTable)
     _ <- ZIO.logInfo(s"End copyDataChOra for ${reqCalc.view_query_id}")
   } yield ()

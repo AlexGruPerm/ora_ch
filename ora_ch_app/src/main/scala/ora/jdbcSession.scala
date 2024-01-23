@@ -464,18 +464,23 @@ case class oraSess(sess : Connection, taskId: Int){
 }
 
 trait jdbcSession {
-  val sess: ZIO[Any,Exception,oraSess]
+  def sess(debugMsg: String): ZIO[Any,Exception,oraSess]
   val props = new Properties()
-  def pgConnection(): ZIO[Any,Exception,oraSess]
+  //def pgConnection(): ZIO[Any,Exception,oraSess]
 }
 
 case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
 
-   val sess: ZIO[Any,Exception,oraSess] = for {
+   println(" ")
+   println("################# This is a jdbcSessionImpl main constructor ###################")
+   println(" ")
+
+   def sess(debugMsg: String): ZIO[Any,Exception,oraSess] = for {
+     _ <- ZIO.logInfo(s" >>> jdbcSessionImpl.sess [$debugMsg] call pgConnection")
      session <- pgConnection()
    } yield session
 
-   def pgConnection():  ZIO[Any,Exception,oraSess] = for {
+   private def pgConnection():  ZIO[Any,Exception,oraSess] = for {
     _ <- ZIO.unit
     sessEffect = ZIO.attemptBlocking{
         DriverManager.registerDriver(new OracleDriver())
