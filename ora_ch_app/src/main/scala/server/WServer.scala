@@ -79,26 +79,6 @@ object WServer {
               sess.closeConnection
           }
     }
-    /*
-    copyEffects = task.tables.map{table =>
-      sess.setTableBeginCopy(table) *>
-        updatedCopiedRowsCount(table,sess,sessCh).repeat(Schedule.spaced(5.second)).fork *>
-            sessCh.getMaxColForSync(table).flatMap{maxValAndCnt =>
-                sessCh.recreateTableCopyData(
-                    table,
-                    sess.getDataResultSet(table, fetch_size, maxValAndCnt),
-                    batch_size,
-                    maxValAndCnt)
-                  .flatMap {
-                  rc => sess.setTableCopied(table, rc)
-                }
-            }
-            .onInterrupt{
-               ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing") *>
-                 sess.closeConnection
-             }
-    }
-    */
     _ <- ZIO.collectAll(copyEffects) //todo: ZIO.collectAllPar(copyEffects).withParallelism(par_degree)
     _ <- sess.taskFinished
     _ <- sess.closeConnection
@@ -116,36 +96,37 @@ object WServer {
       }
   } yield req
 
+  private def currStatusChecker():ZIO[ImplTaskRepo, Throwable, Unit] = for {
+    repo <- ZIO.service[ImplTaskRepo]
+    currStatus <- repo.getState
+    taskId <- repo.getTaskId
+    _ <- ZIO.logInfo(s"Repo currStatus = $currStatus")
+    _ <- ZIO.fail(new Exception(
+      s" already running id = $taskId ,look at tables: ora_to_ch_tasks, ora_to_ch_tasks_tables "))
+      .when(currStatus.state != Wait)
+  } yield ()
+
   private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
-    bodyText <- req.body.asString
-     _ <- ZIO.logInfo(s"task body = $bodyText")
-
+    //bodyText <- req.body.asString
     u <- requestToEntity[ReqNewTask](req)
-
-/*    u <- req.body.asString.map(_.fromJson[ReqNewTask])
-      .catchAllDefect {
-        case e: Exception => ZIO.logError(s"oratoch-1 error parsing input file with task : ${e.getMessage}") *>
-          ZIO.succeed(Left(e.getMessage))
-      }
-      .catchAll {
-        case e: Exception => ZIO.logError(s"oratoch-2 error parsing input file with task : ${e.getMessage}") *>
-          ZIO.succeed(Left(e.getMessage))
-      }*/
-
-    _ <- ZIO.logInfo("~~~~~~~~~~~~~~~~~~")
-    _ <- ZIO.logInfo(s"JSON = $u")
-    _ <- ZIO.logInfo("~~~~~~~~~~~~~~~~~~")
-
     resp <- u match {
       case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
       case Right(newTask) =>
         for {
+          //todo: put currStatusChecker HERE
+          repo <- ZIO.service[ImplTaskRepo]
+          _ <- currStatusChecker()
           taskWithOraSess <- createWsTask(newTask).provide(ZLayer.succeed(newTask.servers.oracle), jdbcSessionImpl.layer)
           wstask = taskWithOraSess._1
           ora = taskWithOraSess._2
-          tr <- ZIO.service[ImplTaskRepo]
-          _ <- tr.create(wstask)
-          _ <- startTask(ora).provide(ZLayer.succeed(tr),
+
+
+/*          currStatus <- tr.getState
+          _ <- ZIO.logInfo(s" TaskRepo currStatus = $currStatus")
+          _ <- currStatusChecker()*/
+
+          _ <- repo.create(wstask)
+          _ <- startTask(ora).provide(ZLayer.succeed(repo),
                                    ZLayer.succeed(newTask.servers.clickhouse),
                                    jdbcChSessionImpl.layer).forkDaemon
           //_ <- fiber.join

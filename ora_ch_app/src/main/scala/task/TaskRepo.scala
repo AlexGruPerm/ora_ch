@@ -17,6 +17,10 @@ trait TaskRepo {
 }
 
 case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
+  /**
+   * Initialize with status () in constructor
+  */
+  //setState()
 
   def create(task: WsTask): Task[TaskId] = for {
     _ <- ref.update(_ => task)
