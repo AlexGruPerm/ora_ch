@@ -24,14 +24,6 @@ import scala.collection.immutable.List
 
 object WServer {
 
-/*  private def updatedCopiedRowsCount(table: Table/*,ora: oraSess*/, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
-  ZIO[jdbcSession,Exception,Unit] = for {
-    s <- ZIO.service[jdbcSession] //produce new oracle session for each call
-    sess <- s.sess("updatedCopiedRowsCount")
-    copiedRows <- ch.getCountCopiedRows(table)
-    _ <- sess.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
-  } yield ()*/
-
   private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
   ZIO[Any,Nothing,Unit] = for {
     copiedRows <- ch.getCountCopiedRows(table)
