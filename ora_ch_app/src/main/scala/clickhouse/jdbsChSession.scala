@@ -325,7 +325,7 @@ case class chSess(sess : Connection, taskId: Int){
           }
       }
       val insQuery: String = s"insert into msk_analytics_caches.${meta.chTable} $selectQuery"
-      println(s"QUERY WITH BINDS: $insQuery")
+      //println(s"QUERY WITH BINDS: $insQuery")
       val rs: ResultSet = sess.createStatement.executeQuery(insQuery)
       rs.close()
     }.catchAll {

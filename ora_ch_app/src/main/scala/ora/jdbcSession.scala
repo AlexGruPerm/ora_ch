@@ -251,7 +251,7 @@ case class oraSess(sess : Connection, taskId: Int){
       val nakedCols = cols.map(chCol => chCol.name).mkString(",")
       val bindQuests = cols.map(_ => "?").mkString(",")
       val insQuery: String = s"insert into msk_analytics_caches.$tableName($nakedCols) values($bindQuests)"
-      println(s" insQuery = $insQuery")
+      //println(s" insQuery = $insQuery")
 
       val ps: PreparedStatement = sess.prepareStatement(insQuery)
       rs.setFetchSize(fetch_size)

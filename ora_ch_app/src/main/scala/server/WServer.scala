@@ -2,20 +2,21 @@ package server
 
 
 import calc.CalcLogic.getCalcMeta
-import calc.{CalcLogic, ReqCalc}
+import calc.{CalcLogic, ImplCalcRepo, ReqCalc, ReqCalcSrc}
 import clickhouse.{chSess, jdbcChSession, jdbcChSessionImpl}
 import common.Types.MaxValAndCnt
 import conf.OraServer
 import error.ResponseMessage
 import ora.{jdbcSession, jdbcSessionImpl, oraSess}
 import request.{ReqNewTask, SrcTable}
-import task.{Executing, ImplTaskRepo, Ready, TaskState, Wait, WsTask}
-import zio.{ZIO, _}
-import zio.http.{handler, _}
+import task.{ImplTaskRepo, WsTask}
+import zio._
+import zio.http._
 import zio.json.{DecoderOps, EncoderOps, JsonDecoder}
 import request.EncDecReqNewTaskImplicits._
 import calc.EncDecReqCalcImplicits._
-import server.WServer.startTask
+import common.{Executing, Ready, TaskState, Wait}
+import server.WServer.{calc, startTask}
 import table.Table
 import zio.json.JsonDecoder.fromCodec
 
@@ -102,7 +103,8 @@ object WServer {
       }
   } yield req
 
-  private def currStatusChecker(): ZIO[ImplTaskRepo, Throwable, Unit] = for {
+  private def currStatusCheckerTask(): ZIO[ImplTaskRepo, Throwable, Unit] = {
+    for {
     repo <- ZIO.service[ImplTaskRepo]
     currStatus <- repo.getState
     taskId <- repo.getTaskId
@@ -111,6 +113,19 @@ object WServer {
       s" already running id = $taskId ,look at tables: ora_to_ch_tasks, ora_to_ch_tasks_tables "))
       .when(currStatus.state != Wait)
   } yield ()
+  }
+
+  private def currStatusCheckerCalc(): ZIO[ImplCalcRepo, Throwable, Unit] = {
+    for {
+    repo <- ZIO.service[ImplCalcRepo]
+    currStatus <- repo.getState
+    taskId <- repo.getCalcId
+    _ <- ZIO.logInfo(s"Repo currStatus = ${currStatus}")
+    _ <- ZIO.fail(new Exception(
+        s" already running id = $taskId ,look at tables: xxx"))
+      .when(currStatus.state != Wait)
+  } yield ()
+  }
 
   private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
     _ <- ZIO.logDebug(s"This is a debug message 1")
@@ -120,7 +135,7 @@ object WServer {
       case Right(newTask) =>
         for {
              repo <- ZIO.service[ImplTaskRepo]
-             _ <- currStatusChecker()
+             _ <- currStatusCheckerTask()
              layerOra = ZLayer.succeed(newTask.servers.oracle) >>> jdbcSessionImpl.layer
              layerCh = ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer
              layers = layerOra ++ layerCh ++ ZLayer.succeed(repo)
@@ -134,25 +149,26 @@ object WServer {
     }
   } yield response
 
-  private def calcAndCopy(reqCalc: ReqCalc): ZIO[ImplTaskRepo, Throwable, Response] = for {
-    _ <- ZIO.unit
+  private def calcAndCopy(reqCalc: ReqCalcSrc): ZIO[ImplCalcRepo, Throwable, Response] = for {
+    repo <- ZIO.service[ImplCalcRepo]
+    _ <- currStatusCheckerCalc()
     layerOra = ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer
     layerCh = ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer
     meta <- CalcLogic.getCalcMeta(reqCalc).provideLayer(layerOra)
     calc = CalcLogic.startCalculation(reqCalc,meta).onInterrupt(CalcLogic.debugInterruption("calc"))
     copy = CalcLogic.copyDataChOra(reqCalc,meta).onInterrupt(CalcLogic.debugInterruption("copy"))
-    layers = layerCh ++ layerOra
+    layers = layerCh ++ layerOra ++ ZLayer.succeed(repo)
     _ <- (calc *> copy).provideLayer(layers).forkDaemon
   } yield Response.json(s"""{"calcid": "${reqCalc.view_query_id}"}""").status(Status.Ok)
 
-  private def calc(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
+  private def calc(req: Request): ZIO[ImplCalcRepo, Throwable, Response] = for {
     bodyText <- req.body.asString
-    _ <- ZIO.logInfo(s"calc body = $bodyText")
-    reqCalcE <- requestToEntity[ReqCalc](req)
-    _ <- ZIO.logInfo(s"JSON = $reqCalcE")
+    _ <- ZIO.logDebug(s"calc body = $bodyText")
+    reqCalcE <- requestToEntity[ReqCalcSrc](req)
+    _ <- ZIO.logDebug(s"JSON = $reqCalcE")
     resp <- reqCalcE match {
       case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
-      case Right(reqCalc) => calcAndCopy(reqCalc)
+      case Right(src) => calcAndCopy(src)
     }
   } yield resp
 
@@ -171,7 +187,7 @@ object WServer {
     }
 
   private val routes = Routes(
-    Method.POST / "task"  -> handler{(req: Request) => catchCover(ZIO.logLevel(LogLevel.Debug){task(req)})},
+    Method.POST / "task"  -> handler{(req: Request) => catchCover(task(req))},// catchCover(ZIO.logLevel(LogLevel.Debug){task(req)})},
     Method.POST / "calc"  -> handler{(req: Request) => catchCover(calc(req))},
     Method.GET / "random" -> handler(Random.nextString(10).map(Response.text(_))),
     Method.GET / "utc"    -> handler(Clock.currentDateTime.map(s => Response.text(s.toString))),

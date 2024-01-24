@@ -1,5 +1,6 @@
 package task
 
+import common.{TaskState, Wait}
 import conf.{ClickhouseServer, Mode, OraServer}
 import table.Table
 

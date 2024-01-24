@@ -1,5 +1,6 @@
 package task
 
+import common.TaskState
 import task.types.TaskId
 import zio.{Ref, Task, UIO, ZIO, ZLayer}
 
