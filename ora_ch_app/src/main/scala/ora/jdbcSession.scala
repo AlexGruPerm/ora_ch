@@ -466,21 +466,21 @@ case class oraSess(sess : Connection, taskId: Int){
 trait jdbcSession {
   def sess(debugMsg: String): ZIO[Any,Exception,oraSess]
   val props = new Properties()
-  //def pgConnection(): ZIO[Any,Exception,oraSess]
+  //def oraConnection(): ZIO[Any,Exception,oraSess]
 }
 
 case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
 
-   println(" ")
+/*   println(" ")
    println("################# This is a jdbcSessionImpl main constructor ###################")
-   println(" ")
+   println(" ")*/
 
    def sess(debugMsg: String): ZIO[Any,Exception,oraSess] = for {
-     _ <- ZIO.logInfo(s" >>> jdbcSessionImpl.sess [$debugMsg] call pgConnection")
-     session <- pgConnection()
+     _ <- ZIO.logDebug(s"jdbcSessionImpl.sess [$debugMsg] call oraConnection")
+     session <- oraConnection()
    } yield session
 
-   private def pgConnection():  ZIO[Any,Exception,oraSess] = for {
+   private def oraConnection():  ZIO[Any,Exception,oraSess] = for {
     _ <- ZIO.unit
     sessEffect = ZIO.attemptBlocking{
         DriverManager.registerDriver(new OracleDriver())
@@ -503,17 +503,15 @@ case class jdbcSessionImpl(ora: OraServer) extends jdbcSession {
       case e: Exception => ZIO.logError(e.getMessage) *>
         ZIO.fail(new Exception(s"${e.getMessage} - ${ora.getUrl()}"))
     }
-
     sess <- sessEffect
     md = sess.sess.getMetaData
-    _ <- ZIO.logInfo(s"Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion}")
-    sid <- ZIO.attemptBlocking{
+    sid <- ZIO.attemptBlocking {
       sess.getPid
     }.catchAll {
-      case e: Exception => ZIO.logError(s" getPid in pgConnection - ${e.getMessage}") *>
+      case e: Exception => ZIO.logError(s" getPid in oraConnection - ${e.getMessage}") *>
         ZIO.fail(new Exception(s"${e.getMessage} - ${ora.getUrl()}"))
     }
-    _ <- ZIO.logInfo(s"oracle session id = $sid")
+    _ <- ZIO.logInfo(s"Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion} SID = $sid")
   } yield sess
 
 }

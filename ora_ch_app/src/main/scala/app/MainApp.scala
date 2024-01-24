@@ -7,18 +7,14 @@ import zio.http._
 
 object MainApp extends ZIOAppDefault {
 
-  //TODO: change logInfo to logDebug somewhere
-
   override def run: ZIO[Any,Throwable,Nothing] =
-    (Server.install(WServer.app).flatMap { port =>
-      Console.printLine(s"Started server on port: $port")
-    } *> ZIO.never)
-      .provide(ImplTaskRepo.layer,
-        Server.defaultWithPort(8081))
-
-  /*
-  val listEffects: List[ZIO[Any,Nothing,Int]] = List(ZIO.succeed(1),ZIO.succeed(1),ZIO.succeed(1))
-  ZIO.collectAllPar(listEffects).withParallelism(3)
-  */
+    ZIO.logLevel(LogLevel.Debug) {
+      ZIO.logDebug("Begin...") *>
+      (Server.install(WServer.app).flatMap { port =>
+        Console.printLine(s"Started server on port: $port")
+      } *> ZIO.never)
+        .provide(ImplTaskRepo.layer,
+          Server.defaultWithPort(8081))
+    }
 
 }

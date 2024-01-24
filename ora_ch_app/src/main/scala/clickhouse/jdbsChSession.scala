@@ -188,7 +188,7 @@ case class chSess(sess : Connection, taskId: Int){
       sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
       sess.createStatement.executeQuery(createScript)
     }.ensuring(
-      ZIO.logInfo("End of the blocking operation in recreateTableCopyData - drop/create.")
+      ZIO.logDebug("End of the blocking operation in recreateTableCopyData - drop/create.")
     ).catchAll {
       case e: Exception =>
         ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>
@@ -266,7 +266,7 @@ case class chSess(sess : Connection, taskId: Int){
       rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
 
     }.ensuring(
-        ZIO.logInfo("End of the blocking operation in recreateTableCopyData - batch inserts.")
+        ZIO.logDebug("End of the blocking operation in recreateTableCopyData - batch inserts.")
     ).catchAll {
       case e: Exception =>
         ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>
@@ -399,7 +399,7 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
     _ <- ZIO.logInfo(s"  ") *>
       ZIO.logInfo(s"New clickhouse connection =============== >>>>>>>>>>>>> ")
     sess <- sessEffect
-    _ <- ZIO.logInfo(s"................... just for debug sess.taskId = ${sess.taskId}...................")
+   // _ <- ZIO.logInfo(s"................... just for debug sess.taskId = ${sess.taskId}...................")
   } yield sess
 
 }

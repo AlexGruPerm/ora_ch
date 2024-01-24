@@ -31,6 +31,7 @@ object WServer {
   } yield ()
 
   private def startTask(newtask: ReqNewTask): ZIO[ImplTaskRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
+    _ <- ZIO.logDebug(s"This is a debug message 2")
     repo <- ZIO.service[ImplTaskRepo]
     jdbcCh <- ZIO.service[jdbcChSession]
     oraSess <- ZIO.service[jdbcSession]
@@ -48,7 +49,7 @@ object WServer {
     _ <- repo.setState(TaskState(Executing))
     stateAfter <- repo.getState
     taskId <- repo.getTaskId
-    _ <- ZIO.logInfo(s"[startTask] [${taskId}] State: ${stateBefore} -> ${stateAfter} ")
+    _ <- ZIO.debug(s"[startTask] [${taskId}] State: ${stateBefore.state} -> ${stateAfter.state} ")
     taskId <- repo.getTaskId
     _ <- ZIO.logInfo(s"startTask: taskId = $taskId")
     sessCh <- jdbcCh.sess(taskId)
@@ -75,13 +76,18 @@ object WServer {
               .flatMap {
                 rc => sess.setTableCopied(table, rc)
               }
+          }.catchAll{
+            case e: Exception => ZIO.logError(s"catchAll in startTask - ${e.getMessage}") *>
+              repo.setState(TaskState(Wait)) *>
+              ZIO.fail(new Exception(e.getMessage))
           }
           .onInterrupt {
             ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing") *>
               sess.closeConnection
           }
     }
-    _ <- ZIO.collectAll(copyEffects) //todo: ZIO.collectAllPar(copyEffects).withParallelism(par_degree)
+    _ <- ZIO.collectAll(copyEffects)
+    _ <- repo.setState(TaskState(Wait))
     _ <- sess.taskFinished
     _ <- sess.closeConnection
   } yield ()
@@ -102,13 +108,14 @@ object WServer {
     repo <- ZIO.service[ImplTaskRepo]
     currStatus <- repo.getState
     taskId <- repo.getTaskId
-    _ <- ZIO.logInfo(s"Repo currStatus = $currStatus")
+    _ <- ZIO.logInfo(s"Repo currStatus = ${currStatus.state}")
     _ <- ZIO.fail(new Exception(
       s" already running id = $taskId ,look at tables: ora_to_ch_tasks, ora_to_ch_tasks_tables "))
       .when(currStatus.state != Wait)
   } yield ()
 
   private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
+    _ <- ZIO.logDebug(s"This is a debug message 1")
     u <- requestToEntity[ReqNewTask](req)
     response <- u match {
       case Left(errorString) => ZioResponseMsgBadRequest(errorString)
@@ -162,7 +169,7 @@ object WServer {
     }
 
   private val routes = Routes(
-    Method.POST / "task"  -> handler{(req: Request) => catchCover(task(req))},
+    Method.POST / "task"  -> handler{(req: Request) => catchCover(ZIO.logLevel(LogLevel.Debug){task(req)})},
     Method.POST / "calc"  -> handler{(req: Request) => catchCover(calc(req))},
     Method.GET / "random" -> handler(Random.nextString(10).map(Response.text(_))),
     Method.GET / "utc"    -> handler(Clock.currentDateTime.map(s => Response.text(s.toString))),
