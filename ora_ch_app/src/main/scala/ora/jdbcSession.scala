@@ -72,7 +72,6 @@ case class oraSess(sess : Connection, taskId: Int){
         case Some(order_by) => s"$dataQuery order by $order_by"
         case None => dataQuery
       }
-      println(s"dateQueryWithOrd = $dateQueryWithOrd")
       val dataRs = sess.createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY,ResultSet.CONCUR_READ_ONLY)
         .executeQuery(dateQueryWithOrd)
       dataRs.setFetchSize(fetch_size)

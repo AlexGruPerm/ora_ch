@@ -49,12 +49,9 @@ object WServer {
     _ <- repo.setState(TaskState(Executing))
     stateAfter <- repo.getState
     taskId <- repo.getTaskId
-    _ <- ZIO.debug(s"[startTask] [${taskId}] State: ${stateBefore.state} -> ${stateAfter.state} ")
+    _ <- ZIO.logDebug(s"[startTask] [${taskId}] State: ${stateBefore.state} -> ${stateAfter.state} ")
     taskId <- repo.getTaskId
-    _ <- ZIO.logInfo(s"startTask: taskId = $taskId")
     sessCh <- jdbcCh.sess(taskId)
-    _ <- ZIO.logInfo(s"startTask: sessCh Connection isClosed = (${sessCh.sess.isClosed}")
-    _ <- ZIO.logInfo(s"[startTask] Clickhouse session taskId = ${sessCh.taskId}")
     task <- repo.ref.get
     setSchemas = task.tables.map(_.schema).toSet diff Set("system","default","information_schema")
 

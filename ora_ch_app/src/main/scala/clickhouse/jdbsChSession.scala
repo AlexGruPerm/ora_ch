@@ -62,11 +62,11 @@ case class chSess(sess : Connection, taskId: Int){
   } yield maxVal
 
   def getMaxColForSync(table: Table): ZIO[Any,Throwable,Option[MaxValAndCnt]] = for {
-    _ <- ZIO.logInfo(s"getMaxColForSync sync_by_column_max = ${table.sync_by_column_max}")
+    _ <- ZIO.logDebug(s"getMaxColForSync sync_by_column_max = ${table.sync_by_column_max}")
     tblExistsCh <- isTableExistsCh(table).when(table.sync_by_column_max.nonEmpty)
-    _ <- ZIO.logInfo(s"tblExistsCh = $tblExistsCh")
+    _ <- ZIO.logDebug(s"tblExistsCh = $tblExistsCh")
     maxColCh <- getMaxValueByColCh(table).when(tblExistsCh.getOrElse(0)==1)
-    _ <- ZIO.logInfo(s"maxColCh = $maxColCh")
+    _ <- ZIO.logDebug(s"maxColCh = $maxColCh")
   } yield maxColCh
 
   /**
@@ -109,8 +109,7 @@ case class chSess(sess : Connection, taskId: Int){
   */
   def recreateTableCopyData(table: Table, rs: ZIO[Any, Exception, ResultSet], batch_size: Int, maxValCnt: Option[MaxValAndCnt]): ZIO[Any, Exception, Long] =
     for {
-    fn <- ZIO.fiberId.map(_.threadName)
-    _ <- ZIO.logInfo(s"recreateTableCopyData fiber name : $fn")
+    _ <- ZIO.logInfo(s"recreateTableCopyData table : ${table.fullTableName()}")
     oraRs <- rs
 
 /*    _ <- ZIO.logInfo(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
@@ -149,7 +148,7 @@ case class chSess(sess : Connection, taskId: Int){
     nakedCols = cols.map(chCol => chCol.name).mkString(",\n")
     colsScript = cols.map(chCol => chCol.clColumnString).mkString(",\n")
 
-    _ <- ZIO.logInfo(s"keyType = ${table.keyType.toString} External pk_columns = ${table.pk_columns}")
+    _ <- ZIO.logDebug(s"keyType = ${table.keyType.toString} External pk_columns = ${table.pk_columns}")
 
     createScript =
       s"""create table ${table.schema}.${table.name}
@@ -171,7 +170,7 @@ case class chSess(sess : Connection, taskId: Int){
             }
          |""".stripMargin
 
-    _ <- ZIO.logInfo(s"createScript = $createScript")
+    _ <- ZIO.logDebug(s"createScript = $createScript")
 
     insQuer =
       s"""insert into ${table.schema}.${table.name}
@@ -181,9 +180,7 @@ case class chSess(sess : Connection, taskId: Int){
          |      ')
          |""".stripMargin
 
-    _ <- ZIO.logInfo(s"insQuer = $insQuer")
-
-
+    _ <- ZIO.logDebug(s"insQuer = $insQuer")
     _ <- ZIO.attemptBlockingInterrupt {
       sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
       sess.createStatement.executeQuery(createScript)
@@ -349,13 +346,13 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
 
   def sess(taskId: Int): ZIO[Any, Exception, chSess] = for {
     session <- chConnection(taskId)
-    _ <- ZIO.logInfo("~~~~~~~~~~~~~~~ Clickhouse connect properties ~~~~~~~~~~~~~~~~")
+    _ <- ZIO.logDebug("~~~~~~~~~~~~~~~ Clickhouse connect properties ~~~~~~~~~~~~~~~~")
     cnt = props.keySet().size()
-    _ <- ZIO.logInfo(s"Connection has $cnt properties")
+    _ <- ZIO.logDebug(s"Connection has $cnt properties")
     keys = props.keySet().toArray.map(_.toString).toList
     _ <- ZIO.foreachDiscard(keys)(k => ZIO.logInfo(s"${k} - ${props.getProperty(k)}]"))
-    _ <- ZIO.logInfo("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    _ <- ZIO.logInfo(s" = [${props.getProperty("")}]")
+    _ <- ZIO.logDebug("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+    _ <- ZIO.logDebug(s" = [${props.getProperty("")}]")
   } yield session
 
   //todo: private
@@ -396,10 +393,8 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
       case e: Exception => ZIO.logError(s"${e.getMessage} - url=[${ch.getUrl}] user=[${ch.user}] password=[${ch.password}] port=[${ch.port}] provider = [${props.getProperty("http_connection_provider")}]") *>
         ZIO.fail(new Exception(s"${e.getMessage} - url=[${ch.getUrl}] user=[${ch.user}] password=[${ch.password}] port=[${ch.port}] provider = [${props.getProperty("http_connection_provider")}]"))
     }
-    _ <- ZIO.logInfo(s"  ") *>
-      ZIO.logInfo(s"New clickhouse connection =============== >>>>>>>>>>>>> ")
+    _ <- ZIO.logDebug(s"New clickhouse connection =============== >>>>>>>>>>>>> ")
     sess <- sessEffect
-   // _ <- ZIO.logInfo(s"................... just for debug sess.taskId = ${sess.taskId}...................")
   } yield sess
 
 }

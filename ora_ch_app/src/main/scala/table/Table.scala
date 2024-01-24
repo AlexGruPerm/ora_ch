@@ -4,7 +4,7 @@ package table
  * Table or view
  */
 case class Table(schema: String,
-                 recreate: Int,
+                 recreate: Int = 0,
                  name: String,
                  keyType: KeyType,
                  keyColumns: String,
@@ -16,4 +16,7 @@ case class Table(schema: String,
                  notnull_columns: Option[List[String]],
                  where_filter: Option[String],
                  sync_by_column_max: Option[String]
-                )
+                ){
+  def fullTableName(): String =
+    s"$schema.$name"
+}

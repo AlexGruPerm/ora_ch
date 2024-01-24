@@ -17,10 +17,6 @@ trait TaskRepo {
 }
 
 case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
-  /**
-   * Initialize with status () in constructor
-  */
-  //setState()
 
   def create(task: WsTask): Task[TaskId] = for {
     currStatus <- getState
@@ -35,7 +31,6 @@ case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
     _ <- ref.update(wst => wst.copy(state = newState))
     _ <- ZIO.logInfo(s"repo state changed: ${currStatus.state} -> ${newState.state}")
   } yield ()
-/*    ref.update(wst => wst.copy(state = newState))*/
 
   def getState: UIO[TaskState] =
     ref.get.map(_.state)
