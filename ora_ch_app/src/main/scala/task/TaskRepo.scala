@@ -14,6 +14,7 @@ trait TaskRepo {
   def getTaskId: UIO[Int]
   def setState(newState: TaskState): UIO[Unit]
   def getState: UIO[TaskState]
+  def clearTask: UIO[Unit]
 }
 
 case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
@@ -34,6 +35,8 @@ case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
 
   def getState: UIO[TaskState] =
     ref.get.map(_.state)
+
+  def clearTask: UIO[Unit] = ref.update(_ => WsTask())
 
 }
 

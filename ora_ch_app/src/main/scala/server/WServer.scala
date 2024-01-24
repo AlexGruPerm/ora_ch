@@ -85,6 +85,7 @@ object WServer {
     }
     _ <- ZIO.collectAll(copyEffects)
     _ <- repo.setState(TaskState(Wait))
+    _ <- repo.clearTask
     _ <- sess.taskFinished
     _ <- sess.closeConnection
   } yield ()
@@ -124,8 +125,12 @@ object WServer {
              layerCh = ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer
              layers = layerOra ++ layerCh ++ ZLayer.succeed(repo)
              _ <- startTask(newTask).provideLayer(layers).forkDaemon
-             //taskId <- repo.getTaskId //todo: Wait no more then 3 seconds, retry/repeat and return real taskId from repo.
-        } yield Response.json(s"""{"taskid": "ok"}""").status(Status.Ok)
+             sched = Schedule.spaced(1.second) && Schedule.recurs(10)
+             taskId <- repo.getTaskId
+               .filterOrFail(_ != 0)(0.toString)
+               .retryOrElse(sched, (_: String, _: (Long, Long)) =>
+                 ZIO.fail(new Exception("Elapsed wait time 10 seconds of getting taskId")))
+        } yield Response.json(s"""{"taskid": "$taskId"}""").status(Status.Ok)
     }
   } yield response
 
