@@ -5,6 +5,7 @@ import server.WServer
 import task.ImplTaskRepo
 import zio.{ZIO, _}
 import zio.http._
+import common.{SessCalc, SessTask}
 
 object MainApp extends ZIOAppDefault {
 
@@ -12,8 +13,9 @@ object MainApp extends ZIOAppDefault {
       (Server.install(WServer.app).flatMap { port =>
         ZIO.logInfo(s"Started server on port: $port")
       } *> ZIO.never)
-        .provide(ImplTaskRepo.layer,
+        .provide(
           ImplCalcRepo.layer,
+          ImplTaskRepo.layer,
           Server.defaultWithPort(8081))
   }.provide(Runtime.removeDefaultLoggers)
 

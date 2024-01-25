@@ -7,7 +7,7 @@ import clickhouse.{chSess, jdbcChSession, jdbcChSessionImpl}
 import common.Types.MaxValAndCnt
 import conf.OraServer
 import error.ResponseMessage
-import ora.{jdbcSession, jdbcSessionImpl, oraSess}
+import ora.{jdbcSession, jdbcSessionImpl, oraSessTask}
 import request.{ReqNewTask, SrcTable}
 import task.{ImplTaskRepo, WsTask}
 import zio._
@@ -15,7 +15,8 @@ import zio.http._
 import zio.json.{DecoderOps, EncoderOps, JsonDecoder}
 import request.EncDecReqNewTaskImplicits._
 import calc.EncDecReqCalcImplicits._
-import common.{Executing, Ready, TaskState, Wait}
+import common.{Executing, Ready, SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _}
+import connrepo.OraConnRepoImpl
 import server.WServer.{calc, startTask}
 import table.Table
 import zio.json.JsonDecoder.fromCodec
@@ -25,7 +26,7 @@ import scala.collection.immutable.List
 
 object WServer {
 
-  private def updatedCopiedRowsCount(table: Table,ora: oraSess, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
+  private def updatedCopiedRowsCount(table: Table, ora: oraSessTask, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
   ZIO[Any,Nothing,Unit] = for {
     copiedRows <- ch.getCountCopiedRows(table)
     _ <- ora.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
@@ -36,7 +37,7 @@ object WServer {
     repo <- ZIO.service[ImplTaskRepo]
     jdbcCh <- ZIO.service[jdbcChSession]
     oraSess <- ZIO.service[jdbcSession]
-    sess <- oraSess.sess("startTask")
+    sess <- oraSess.sessTask("startTask")
     taskId <- sess.getTaskIdFromSess
     t <- sess.getTables(newtask.schemas)
     wstask = WsTask(id = taskId,
@@ -80,15 +81,15 @@ object WServer {
               ZIO.fail(new Exception(e.getMessage))
           }
           .onInterrupt {
-            ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing") *>
-              sess.closeConnection
+            ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing") //*>
+              //sess.closeConnection
           }
     }
     _ <- ZIO.collectAll(copyEffects)
     _ <- repo.setState(TaskState(Wait))
     _ <- repo.clearTask
     _ <- sess.taskFinished
-    _ <- sess.closeConnection
+    //_ <- sess.closeConnection
   } yield ()
 
   private def requestToEntity[A](r: Request)(implicit decoder: JsonDecoder[A]): ZIO[Any, Nothing, Either[String, A]] = for {
@@ -120,14 +121,14 @@ object WServer {
     repo <- ZIO.service[ImplCalcRepo]
     currStatus <- repo.getState
     taskId <- repo.getCalcId
-    _ <- ZIO.logInfo(s"Repo currStatus = ${currStatus}")
+    _ <- ZIO.logInfo(s"Repo currStatus = ${currStatus.state}")
     _ <- ZIO.fail(new Exception(
         s" already running id = $taskId ,look at tables: xxx"))
       .when(currStatus.state != Wait)
   } yield ()
   }
 
-  private def task(req: Request): ZIO[ImplTaskRepo, Throwable, Response] = for {
+  private def task(req: Request): ZIO[ImplTaskRepo with SessTypeEnum, Throwable, Response] = for {
     _ <- ZIO.logDebug(s"This is a debug message 1")
     u <- requestToEntity[ReqNewTask](req)
     response <- u match {
@@ -136,10 +137,16 @@ object WServer {
         for {
              repo <- ZIO.service[ImplTaskRepo]
              _ <- currStatusCheckerTask()
-             layerOra = ZLayer.succeed(newTask.servers.oracle) >>> jdbcSessionImpl.layer
-             layerCh = ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer
-             layers = layerOra ++ layerCh ++ ZLayer.succeed(repo)
-             _ <- startTask(newTask).provideLayer(layers).forkDaemon
+             layerOraConn = OraConnRepoImpl.layer(newTask.servers.oracle)
+             _ <- startTask(newTask).provide(
+               layerOraConn,
+               ZLayer.succeed(repo),
+               ZLayer.succeed(newTask.servers.oracle),
+               jdbcSessionImpl.layer,
+               ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer,
+               ZLayer.succeed(SessCalc)
+             ).forkDaemon
+             //_ <- startTask(newTask).provideLayer(layers).forkDaemon
              sched = Schedule.spaced(1.second) && Schedule.recurs(10)
              taskId <- repo.getTaskId
                .filterOrFail(_ != 0)(0.toString)
@@ -149,19 +156,25 @@ object WServer {
     }
   } yield response
 
-  private def calcAndCopy(reqCalc: ReqCalcSrc): ZIO[ImplCalcRepo, Throwable, Response] = for {
+  private def calcAndCopy(reqCalc: ReqCalcSrc): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo <- ZIO.service[ImplCalcRepo]
     _ <- currStatusCheckerCalc()
+    layerOraConn = OraConnRepoImpl.layer(reqCalc.servers.oracle)
     layerOra = ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer
-    layerCh = ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer
-    meta <- CalcLogic.getCalcMeta(reqCalc).provideLayer(layerOra)
+    meta <- CalcLogic.getCalcMeta(reqCalc).provide(layerOraConn,layerOra,ZLayer.succeed(SessCalc))
     calc = CalcLogic.startCalculation(reqCalc,meta).onInterrupt(CalcLogic.debugInterruption("calc"))
     copy = CalcLogic.copyDataChOra(reqCalc,meta).onInterrupt(CalcLogic.debugInterruption("copy"))
-    layers = layerCh ++ layerOra ++ ZLayer.succeed(repo)
-    _ <- (calc *> copy).provideLayer(layers).forkDaemon
+    _ <- (calc *> copy).provide(
+      layerOraConn,
+      ZLayer.succeed(repo),
+      ZLayer.succeed(reqCalc.servers.oracle),
+      jdbcSessionImpl.layer,
+      ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
+      ZLayer.succeed(SessCalc)
+    ).forkDaemon
   } yield Response.json(s"""{"calcid": "${reqCalc.view_query_id}"}""").status(Status.Ok)
 
-  private def calc(req: Request): ZIO[ImplCalcRepo, Throwable, Response] = for {
+  private def calc(req: Request): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     bodyText <- req.body.asString
     _ <- ZIO.logDebug(s"calc body = $bodyText")
     reqCalcE <- requestToEntity[ReqCalcSrc](req)
@@ -187,8 +200,12 @@ object WServer {
     }
 
   private val routes = Routes(
-    Method.POST / "task"  -> handler{(req: Request) => catchCover(task(req))},// catchCover(ZIO.logLevel(LogLevel.Debug){task(req)})},
-    Method.POST / "calc"  -> handler{(req: Request) => catchCover(calc(req))},
+    Method.POST / "task"  -> handler{(req: Request) =>
+      catchCover(task(req).provideSome[ImplTaskRepo](ZLayer.succeed(SessTask)))
+    },
+    Method.POST / "calc"  -> handler{(req: Request) =>
+      catchCover(calc(req).provideSome[ImplCalcRepo](ZLayer.succeed(SessCalc)))
+    },
     Method.GET / "random" -> handler(Random.nextString(10).map(Response.text(_))),
     Method.GET / "utc"    -> handler(Clock.currentDateTime.map(s => Response.text(s.toString))),
     Method.GET / "main"   -> handler(catchCover(getMainPage)),

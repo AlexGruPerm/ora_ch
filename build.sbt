@@ -1,7 +1,7 @@
 name := "ora_ch_app"
 
 ThisBuild / organization := "yakushev"
-ThisBuild / version      := "0.0.7"
+ThisBuild / version      := "0.0.8"
 ThisBuild / scalaVersion := "2.13.10"
 
   val Versions = new {

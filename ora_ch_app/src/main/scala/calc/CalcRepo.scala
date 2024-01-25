@@ -3,6 +3,7 @@ package calc
 import calc.types.CalcId
 import zio.{Ref, Task, UIO, ZIO, ZLayer}
 import common._
+import connrepo.OraConnRepoImpl
 
 object types {
   type CalcId = Int
@@ -10,6 +11,7 @@ object types {
 
 trait CalcRepo {
   def create(task: ReqCalc): Task[CalcId]
+  def updateCalcId(calcId: Int): UIO[Unit]
   def getCalcId: UIO[Int]
   def setState(newState: CalcState): UIO[Unit]
   def getState: UIO[CalcState]
@@ -23,6 +25,8 @@ case class ImplCalcRepo(ref: Ref[ReqCalc]) extends CalcRepo {
     _ <- ref.update(_ => task)
     _ <- ZIO.logInfo(s"repo state changed: ${currStatus.state} -> ${task.state}")
   } yield task.id
+
+  def updateCalcId(calcId: Int): UIO[Unit] = ref.update(c => c.copy(id =calcId))
 
   def getCalcId: UIO[Int] = ref.get.map(_.id)
 
@@ -41,9 +45,9 @@ case class ImplCalcRepo(ref: Ref[ReqCalc]) extends CalcRepo {
 
 object ImplCalcRepo {
   def layer: ZLayer[Any, Nothing, ImplCalcRepo] =
-    ZLayer.fromZIO(
-      Ref.make(ReqCalc()).map(r => ImplCalcRepo(r))
-    )
+      ZLayer.fromZIO(
+        Ref.make(ReqCalc()).map(r => ImplCalcRepo(r))
+      )
 }
 
 

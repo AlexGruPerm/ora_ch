@@ -15,6 +15,7 @@ case class ReqCalcSrc(servers: Servers,
 
 case class ReqCalc(
                    id :Int = 0,
+                   id_vq: Int = 0,
                    state: CalcState = CalcState(Wait),
                    oraServer: Option[OraServer] = Option.empty[OraServer],
                    clickhouseServer: Option[ClickhouseServer] = Option.empty[ClickhouseServer],

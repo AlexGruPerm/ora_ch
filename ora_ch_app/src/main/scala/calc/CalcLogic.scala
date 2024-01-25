@@ -2,6 +2,7 @@ package calc
 
 import clickhouse.jdbcChSession
 import common.{CalcState, Executing, Wait}
+import connrepo.OraConnRepoImpl
 import ora.jdbcSession
 import zio.{FiberId, ZIO}
 
@@ -23,7 +24,7 @@ object CalcLogic {
 
   def getCalcMeta(reqCalc: ReqCalcSrc): ZIO[jdbcSession,Throwable,ViewQueryMeta] = for {
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sess("getCalcMeta")
+    ora <- oraSession.sessCalc("getCalcMeta")
     _ <- ZIO.logInfo(s"getCalcMeta Oracle SID = ${ora.getPid}")
     vqMeta <- ora.getVqMeta(reqCalc.view_query_id)
   } yield vqMeta
@@ -52,6 +53,16 @@ object CalcLogic {
   } yield ()
 
   /**
+   * Save new row into log table ora_to_ch_views_query_log
+   * for given ID_VQ (look ora_to_ch_views_query)
+  */
+  private def beginQueryLog(idVq: Int): ZIO[jdbcSession,Throwable, Int] = for {
+    oraSession <- ZIO.service[jdbcSession]
+    ora <- oraSession.sessCalc("beginQueryLog")
+    id <- ora.insertViewQueryLog(idVq)
+  } yield id
+
+  /**
    * 1. get meta data about this calculation from oracle database.
    * 2.
   */
@@ -64,7 +75,9 @@ object CalcLogic {
     _ <- ZIO.logDebug("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
     _ <- ZIO.logInfo(s"ch_table = ${meta.chTable} params_count = ${meta.params.size}")
     repo <- ZIO.service[ImplCalcRepo]
-    calc = ReqCalc(id = reqCalc.view_query_id,
+    calc = ReqCalc(
+      id = 0,
+      id_vq = reqCalc.view_query_id,
       state = CalcState(Executing),
       oraServer = Some(reqCalc.servers.oracle),
       clickhouseServer = Some(reqCalc.servers.clickhouse),
@@ -75,6 +88,8 @@ object CalcLogic {
     stateAfter <- repo.getState
     calcId <- repo.getCalcId
     _ <- ZIO.logDebug(s"[startCalc] [$calcId] State: ${stateBefore.state} -> ${stateAfter.state} ")
+    id <- beginQueryLog(calc.id_vq)
+    _ <- repo.updateCalcId(id)
     _ <- meta.viewName match {
       case Some(_) => calcView(meta, reqCalc)
       case None => calcQuery(meta, reqCalc)
@@ -89,7 +104,7 @@ object CalcLogic {
     ch <- chSession.sess(0) //todo: 0 - just for debug, there is no task when we calc.
     chTableRs <- ch.getChTableResultSet(meta.chTable)
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sess("copyDataChOra")
+    ora <- oraSession.sessCalc("copyDataChOra")
     _ <- ora.insertRsDataInTable(chTableRs,meta.oraTable)
     _ <- repo.setState(CalcState(Wait))
     stateAfter <- repo.getState

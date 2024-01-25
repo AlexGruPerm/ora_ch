@@ -350,7 +350,7 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
     cnt = props.keySet().size()
     _ <- ZIO.logDebug(s"Connection has $cnt properties")
     keys = props.keySet().toArray.map(_.toString).toList
-    _ <- ZIO.foreachDiscard(keys)(k => ZIO.logInfo(s"${k} - ${props.getProperty(k)}]"))
+    _ <- ZIO.foreachDiscard(keys)(k => ZIO.logDebug(s"$k - ${props.getProperty(k)}]"))
     _ <- ZIO.logDebug("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     _ <- ZIO.logDebug(s" = [${props.getProperty("")}]")
   } yield session
