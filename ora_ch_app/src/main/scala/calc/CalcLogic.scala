@@ -1,12 +1,9 @@
 package calc
 
 import clickhouse.jdbcChSession
-import common.{CalcState, Executing, Wait}
-import connrepo.OraConnRepoImpl
+import common.{CalcState, Calculation, Copying, Wait}
 import ora.jdbcSession
 import zio.{FiberId, ZIO}
-
-import java.sql.ResultSet
 
 /**
  * Contains functions that related with process of calculation in clickhouse.
@@ -44,6 +41,7 @@ object CalcLogic {
   private def calcView(meta: ViewQueryMeta, reqCalc: ReqCalcSrc): ZIO[jdbcSession with jdbcChSession, Throwable, Unit] = for {
     _ <- ZIO.logInfo(s"calcView for vqId = ${reqCalc.view_query_id} clickhouse table = ${meta.chTable}")
     _ <- truncTable(meta.chTable)
+    // _ <- insertFromView(meta, reqCalc)
   } yield ()
 
   private def calcQuery(meta: ViewQueryMeta, reqCalc: ReqCalcSrc): ZIO[jdbcSession with jdbcChSession, Throwable, Unit] = for {
@@ -62,6 +60,19 @@ object CalcLogic {
     id <- ora.insertViewQueryLog(idVq)
   } yield id
 
+  private def saveEndCalculation(): ZIO[jdbcSession, Throwable, Unit] = for {
+    _ <- ZIO.logInfo(s"saveEndCalculation..........")
+    oraSession <- ZIO.service[jdbcSession]
+    ora <- oraSession.sessCalc("saveEndCalculation")
+    _ <- ora.saveEndCalculation()
+  } yield ()
+
+  private def saveEndCopying(): ZIO[jdbcSession, Throwable, Unit] = for {
+    oraSession <- ZIO.service[jdbcSession]
+    ora <- oraSession.sessCalc("saveEndCopying")
+    _ <- ora.saveEndCopying()
+  } yield ()
+
   /**
    * 1. get meta data about this calculation from oracle database.
    * 2.
@@ -78,13 +89,13 @@ object CalcLogic {
     calc = ReqCalc(
       id = 0,
       id_vq = reqCalc.view_query_id,
-      state = CalcState(Executing),
+      state = CalcState(Wait),
       oraServer = Some(reqCalc.servers.oracle),
       clickhouseServer = Some(reqCalc.servers.clickhouse),
       params = reqCalc.params)
     _ <- repo.create(calc)
     stateBefore <- repo.getState
-    _ <- repo.setState(CalcState(Executing))
+    _ <- repo.setState(CalcState(Calculation))
     stateAfter <- repo.getState
     calcId <- repo.getCalcId
     _ <- ZIO.logDebug(s"[startCalc] [$calcId] State: ${stateBefore.state} -> ${stateAfter.state} ")
@@ -94,6 +105,7 @@ object CalcLogic {
       case Some(_) => calcView(meta, reqCalc)
       case None => calcQuery(meta, reqCalc)
     }
+    _ <- saveEndCalculation()
   } yield ()
 
   def copyDataChOra(reqCalc: ReqCalcSrc, meta: ViewQueryMeta): ZIO[ImplCalcRepo with jdbcSession with jdbcChSession, Throwable, Unit] = for {
@@ -105,9 +117,12 @@ object CalcLogic {
     chTableRs <- ch.getChTableResultSet(meta.chTable)
     oraSession <- ZIO.service[jdbcSession]
     ora <- oraSession.sessCalc("copyDataChOra")
+    _ <- repo.setState(CalcState(Copying))
+    _ <- ora.saveBeginCopying()
     _ <- ora.insertRsDataInTable(chTableRs,meta.oraTable)
     _ <- repo.setState(CalcState(Wait))
     stateAfter <- repo.getState
+    _ <- saveEndCopying()
     _ <- ZIO.logInfo(s"End copyDataChOra for ${reqCalc.view_query_id} State: ${stateBefore.state} -> ${stateAfter.state}")
   } yield ()
 

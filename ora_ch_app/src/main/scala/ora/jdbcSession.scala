@@ -28,13 +28,13 @@ sealed trait oraSess {
   }
 }
 
-case class oraSessCalc(sess : Connection, taskId: Int) extends oraSess {
+case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
 
   def insertViewQueryLog(idVq: Int): ZIO[Any, Exception, Int] = for {
     id <- ZIO.attemptBlocking {
       val query: String =
-        s""" insert into ora_to_ch_views_query_log(id,id_vq,ora_sid,begin_datetime)
-           | values(s_ora_to_ch_views_query_log.nextval, $idVq, sys_context('USERENV','SID'), sysdate)
+        s""" insert into ora_to_ch_views_query_log(id,id_vq,ora_sid,begin_calc,state)
+           | values(s_ora_to_ch_views_query_log.nextval, $idVq, sys_context('USERENV','SID'), sysdate, 'calculation')
            | """.stripMargin
       val idCol: Array[String] = Array("ID")
       val insertVqLog = sess.prepareStatement(query, idCol)
@@ -53,6 +53,60 @@ case class oraSessCalc(sess : Connection, taskId: Int) extends oraSess {
         ZIO.fail(new Exception(s"${e.getMessage}"))
     }
   } yield id
+
+  def saveEndCalculation(): ZIO[Any, Exception, Unit] = for {
+    _ <- ZIO.logInfo(s"saveEndCalculation calcId=$calcId")
+    _ <- ZIO.attemptBlocking {
+      val query: String =
+        s""" update ora_to_ch_views_query_log l
+           |   set l.end_calc = sysdate,
+           |       l.state    = 'copying'
+           | where l.id = $calcId
+           | """.stripMargin
+      val rs: ResultSet = sess.createStatement.executeQuery(query)
+      rs.next()
+      sess.commit()
+      rs.close()
+    }.catchAll {
+      case e: Exception => ZIO.logError(e.getMessage) *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield ()
+
+  def saveBeginCopying(): ZIO[Any, Exception, Unit] = for {
+    _ <- ZIO.attemptBlocking {
+      val query: String =
+        s""" update ora_to_ch_views_query_log l
+           |   set l.begin_copy = sysdate,
+           |       l.state    = 'copying'
+           | where l.id = $calcId
+           | """.stripMargin
+      val rs: ResultSet = sess.createStatement.executeQuery(query)
+      sess.commit()
+      rs.close()
+    }.catchAll {
+      case e: Exception => ZIO.logError(e.getMessage) *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield ()
+
+  def saveEndCopying(): ZIO[Any, Exception, Unit] = for {
+    _ <- ZIO.attemptBlocking {
+      val query: String =
+        s""" update ora_to_ch_views_query_log l
+           |   set l.end_copy = sysdate,
+           |       l.state    = 'finished'
+           | where l.id = $calcId
+           | """.stripMargin
+      val rs: ResultSet = sess.createStatement.executeQuery(query)
+      sess.commit()
+      rs.close()
+    }.catchAll {
+      case e: Exception => ZIO.logError(e.getMessage) *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield ()
+
 
   def getVqMeta(vqId: Int): ZIO[Any, Exception, ViewQueryMeta] = for {
     _ <- ZIO.unit
@@ -180,7 +234,7 @@ case class oraSessCalc(sess : Connection, taskId: Int) extends oraSess {
       sess.close()
       rs.close()
     }.catchAll {
-      case e: Throwable => ZIO.logError(s"insertRsDataInTable tableName=$tableName exception : ${e.getMessage}") *>
+       e: Throwable => ZIO.logError(s"insertRsDataInTable tableName=$tableName exception : ${e.getMessage}") *>
         ZIO.fail(new Exception(s"${e.getMessage}"))
     }
   } yield ()

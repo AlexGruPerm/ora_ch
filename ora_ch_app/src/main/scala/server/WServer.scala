@@ -15,7 +15,7 @@ import zio.http._
 import zio.json.{DecoderOps, EncoderOps, JsonDecoder}
 import request.EncDecReqNewTaskImplicits._
 import calc.EncDecReqCalcImplicits._
-import common.{Executing, Ready, SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _}
+import common.{SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _}
 import connrepo.OraConnRepoImpl
 import server.WServer.{calc, startTask}
 import table.Table
@@ -172,7 +172,12 @@ object WServer {
       ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
       ZLayer.succeed(SessCalc)
     ).forkDaemon
-  } yield Response.json(s"""{"calcid": "${reqCalc.view_query_id}"}""").status(Status.Ok)
+    sched = Schedule.spaced(1.second) && Schedule.recurs(10)
+    calcId <- repo.getCalcId
+      .filterOrFail(_ != 0)(0.toString)
+      .retryOrElse(sched, (_: String, _: (Long, Long)) =>
+        ZIO.fail(new Exception("Elapsed wait time 10 seconds of getting calcId")))
+  } yield Response.json(s"""{"calcId":"$calcId", "id_vq":"${reqCalc.view_query_id}"}""").status(Status.Ok)
 
   private def calc(req: Request): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     bodyText <- req.body.asString

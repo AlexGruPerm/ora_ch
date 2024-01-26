@@ -43,8 +43,10 @@ create table ora_to_ch_views_query_log(
  id             integer constraint pk_ora_to_ch_views_query_log primary key,
  id_vq          integer not null constraint fk_orach_vq_log_vq references ora_to_ch_views_query(id) on delete cascade,
  ora_sid        integer,
- begin_datetime date,
- end_datetime   date,
+ begin_calc     date,
+ end_calc       date,
+ begin_copy     date,
+ end_copy       date,
  state          varchar2(32) default 'none'
 );
 

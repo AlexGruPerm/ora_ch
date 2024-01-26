@@ -25,6 +25,7 @@ trait OraConnRepo {
 case class OraConnRepoImpl(conf: OraServer, ref: Ref[Connection]) extends OraConnRepo{
   def getConnection(): ZIO[Any, Nothing, Connection] = ref.get
   def getUrl(): ZIO[Any, Nothing, String] = ZIO.succeed(conf.getUrl())
+  //TODO: move here all from jdbcSession !!!
 }
 
 /**
@@ -56,7 +57,8 @@ object OraConnRepoImpl {
   private def source(conf: OraServer): ZIO[Scope, Exception, Connection] =
     ZIO.acquireRelease(acquire(conf))(release(_))
 
-  def layer(conf: OraServer): ZLayer[Any,Exception,OraConnRepoImpl] =
+  def layer(conf: OraServer): ZLayer[Any,Exception,OraConnRepoImpl] = {
     ZLayer.scoped(source(conf).flatMap(conn => Ref.make(conn).map(r => OraConnRepoImpl(conf,r))))
+  }
 
 }
