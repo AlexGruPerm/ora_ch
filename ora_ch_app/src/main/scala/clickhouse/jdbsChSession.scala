@@ -43,7 +43,32 @@ case class chSess(sess : Connection, taskId: Int){
     }
   } yield tblExists
 
+  def updateColumns(updateTable: Table, updTable: Table, pkColumns: List[String] ): ZIO[Any,Exception,Unit] = for {
+    res <- ZIO.unit
+    schema = updateTable.schema
+    _ <- ZIO.attemptBlocking {
+      val pkColsStr = pkColumns.mkString(",")
+      val updateColsSql = updateTable.update_fields.getOrElse(List("empty_update_fields")).map{
+        col=>
+        s"$col = joinGet($schema.${updTable.name}, '$col', $pkColsStr)"
+      }.mkString(",")
 
+      val updateQuery =
+        s"""
+           |ALTER TABLE $schema.${updateTable.name}
+           |UPDATE
+           |       $updateColsSql
+           |where 1>0;
+           |""".stripMargin
+
+      println(s"updateQuery = $updateQuery")
+      val rs = sess.createStatement.executeQuery(updateQuery)
+      rs.close()
+    }.catchAll {
+      case e: Exception => ZIO.logError(s"isTableExistsCh exception - ${e.getMessage}") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield ()
 
   def getMaxValueByColCh(table: Table): ZIO[Any,Throwable,MaxValAndCnt] = for {
     maxVal <- ZIO.attemptBlocking {
@@ -70,6 +95,37 @@ case class chSess(sess : Connection, taskId: Int){
   } yield maxColCh
 
   /**
+   * Return the list of Primary key columns for clickhouse table.
+   * Using in part:) Engine = Join(ANY, LEFT, date_start,date_end,id);
+   *
+   * select t.primary_key
+   * from system.tables t
+   * where t.database='msk_arm_v2' and
+   * t.name='evc'
+  */
+  def getPkColumns(table: Table): ZIO[Any,Throwable,List[String]] = for {
+    _ <- ZIO.unit
+    fullTableName = s"${table.schema.toLowerCase}.${table.name.toLowerCase}"
+    pkString <- ZIO.attemptBlocking {
+      val rs = sess.createStatement.executeQuery(
+        s"""
+           | select t.primary_key
+           |    from system.tables t
+           |    where t.database = '${table.schema.toLowerCase}' and
+           |    t.name           = '${table.name.toLowerCase}'
+           |""".stripMargin)
+      rs.next()
+      val pks = rs.getString(1)
+      rs.close()
+      pks
+    }.catchAll {
+      case e: Exception =>
+        ZIO.logError(s"getPkColumns exception - ${e.getMessage} for $fullTableName") *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+  } yield pkString.split(",") .toList
+
+  /**
    * return count of copied rows.
    */
   def getCountCopiedRows(table: Table): ZIO[Any, Nothing, Long] = for {
@@ -82,6 +138,25 @@ case class chSess(sess : Connection, taskId: Int){
         case e: Exception => ZIO.logError(s"No problem. getCountCopiedRows - Defect - ${e.getMessage}") *>
           ZIO.succeed(0L)
       }.catchAll {
+      case e: Exception => ZIO.logError(s"No problem. getCountCopiedRows - Exception - ${e.getMessage}") *>
+        ZIO.succeed(0L)
+    }
+  } yield rows
+
+  def getCountCopiedRowsFUpd(table: Table): ZIO[Any, Nothing, Long] = for {
+    rows <- ZIO.attempt {
+      val rsRowCount = sess.createStatement.executeQuery(
+        s""" select t.total_rows
+           | from system.tables t
+           | where t.database = '${table.schema}' and
+           |      t.name      = '${table.name}' """.stripMargin)
+      rsRowCount.next()
+      val rowCount = rsRowCount.getLong(1)
+      rowCount
+    }.catchAllDefect {
+      case e: Exception => ZIO.logError(s"No problem. getCountCopiedRows - Defect - ${e.getMessage}") *>
+        ZIO.succeed(0L)
+    }.catchAll {
       case e: Exception => ZIO.logError(s"No problem. getCountCopiedRows - Exception - ${e.getMessage}") *>
         ZIO.succeed(0L)
     }
@@ -107,7 +182,10 @@ case class chSess(sess : Connection, taskId: Int){
    * oraConn.getMetaData.getColumns(null,"msk_analytics","v_gp_kbk_un","cr_code").getInt("CHAR_OCTET_LENGTH")
    *
   */
-  def recreateTableCopyData(table: Table, rs: ZIO[Any, Exception, ResultSet], batch_size: Int, maxValCnt: Option[MaxValAndCnt]): ZIO[Any, Exception, Long] =
+  def recreateTableCopyData(table: Table,
+                            rs: ZIO[Any, Exception, ResultSet],
+                            batch_size: Int,
+                            maxValCnt: Option[MaxValAndCnt]): ZIO[Any, Exception, Long] =
     for {
     _ <- ZIO.logInfo(s"recreateTableCopyData table : ${table.fullTableName()}")
     oraRs <- rs
@@ -260,8 +338,8 @@ case class chSess(sess : Connection, taskId: Int){
       val rsRowCount = sess.createStatement.executeQuery(s"select sum(1) as cnt from ${table.schema}.${table.name}")
       rsRowCount.next()
       val rowCount = rsRowCount.getLong(1)
+      rsRowCount.close()
       rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
-
     }.ensuring(
         ZIO.logDebug("End of the blocking operation in recreateTableCopyData - batch inserts.")
     ).catchAll {
@@ -273,6 +351,165 @@ case class chSess(sess : Connection, taskId: Int){
     _ <- ZIO.logInfo(s"Copied $rows rows to ${table.schema}.${table.name}")
 
   } yield rows
+
+  def recreateTableCopyDataForUpdate(table: Table,
+                                     rs: ZIO[Any, Exception, ResultSet],
+                                     batch_size: Int,
+                                     pkColList: List[String]): ZIO[Any, Exception, Long] =
+    for {
+      _ <- ZIO.logInfo(s"recreateTableCopyDataForUpdate table : ${table.fullTableName()}")
+      oraRs <- rs
+
+      /*    _ <- ZIO.logInfo(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+      _ <- ZIO.foreachDiscard((1 to oraRs.getMetaData.getColumnCount)){i =>
+        ZIO.logInfo(
+          s"""${oraRs.getMetaData.getColumnName(i).toLowerCase} -
+             |${oraRs.getMetaData.getColumnTypeName(i)} -
+             |${oraRs.getMetaData.getColumnClassName(i)} -
+             |${oraRs.getMetaData.getColumnDisplaySize(i)} -
+             |${oraRs.getMetaData.getPrecision(i)} -
+             |${oraRs.getMetaData.getScale(i)}
+             |""".stripMargin)
+         }
+      _ <- ZIO.logInfo(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")*/
+
+      cols = (1 to oraRs.getMetaData.getColumnCount)
+        .map(i =>
+          OraChColumn(
+            oraRs.getMetaData.getColumnName(i).toLowerCase,
+            oraRs.getMetaData.getColumnTypeName(i),
+            oraRs.getMetaData.getColumnClassName(i),
+            oraRs.getMetaData.getColumnDisplaySize(i),
+            /*todo:
+               06X0100000 - 10 Chars as in getColumnDisplaySize, but 11 Bytes.
+               where X is Cyrillic letter.
+            */
+            //todo: add this property to json. "col_precision_2x":["cr_code"]
+            if (oraRs.getMetaData.getColumnName(i).toLowerCase == "cr_code")
+              oraRs.getMetaData.getPrecision(i) * 2
+            else
+              oraRs.getMetaData.getPrecision(i),
+            oraRs.getMetaData.getScale(i),
+            oraRs.getMetaData.isNullable(i),
+            table.notnull_columns.getOrElse(List.empty[String])
+          )).toList
+      nakedCols = cols.map(chCol => chCol.name).mkString(",\n")
+      colsScript = cols.map(chCol => chCol.clColumnString).mkString(",\n")
+
+      createScript =
+        s"""create table ${table.schema}.${table.name}
+           |(
+           | $colsScript
+           |) ENGINE = Join(ANY, LEFT, ${pkColList.mkString(",")})
+           |""".stripMargin
+
+      _ <- ZIO.logInfo(s"createScript = $createScript")
+
+      insQuer =
+        s"""insert into ${table.schema}.${table.name}
+           |select $nakedCols
+           |from
+           |input('$colsScript
+           |      ')
+           |""".stripMargin
+
+      _ <- ZIO.logInfo(s"insQuer = $insQuer")
+
+      _ <- ZIO.attemptBlockingInterrupt {
+        sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
+        sess.createStatement.executeQuery(createScript)
+      }.ensuring(
+        ZIO.logDebug("End of the blocking operation in recreateTableCopyData - drop/create.")
+      ).catchAll {
+        case e: Exception =>
+          ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>
+            ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+
+      rows <- ZIO.attemptBlockingInterrupt {
+        //------------------------------------
+        val ps: PreparedStatement = sess.prepareStatement(insQuer)
+
+        Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) {
+          case (counter, rs) =>
+            cols.foldLeft(1) {
+              case (i, c) =>
+                (c.typeName, c.scale) match {
+                  // Long - because getInt is that 4294967298 is outside the range of Java's int
+                  case ("NUMBER", 0) => ps.setLong(i, rs.getLong(c.name))
+                  /*                  {
+                                  println(s"NUMBER_0 ${c.name}")
+                                  val intVal: Long = rs.getLong(c.name)
+                                  println(s"intVal = $intVal")
+                                  ps.setLong(i, intVal)
+                                  //ps.SetLong ???
+                                }*/
+                  case ("NUMBER", _) => ps.setDouble(i, rs.getDouble(c.name))
+                  /*                  {
+                                  println(s"NUMBER__ ${c.name}")
+                                  val dblVal: Double = rs.getDouble(c.name)
+                                  println(s"dblVal = $dblVal")
+                                  ps.setDouble(i, dblVal)
+                                }*/
+                  /*
+                    {
+                    val d: java.math.BigDecimal = rs.getBigDecimal(c.name)
+                    println(s"BigDecimal value = $d")
+                    ps.setBigDecimal(i,d)
+                  }
+                  */
+                  case ("CLOB", _) => ps.setString(i, rs.getString(c.name))
+                  case ("VARCHAR2", _) => ps.setString(i, rs.getString(c.name))
+                  case ("DATE", _) => {
+                    val tmp = rs.getString(c.name)
+                    val isNull: Boolean = rs.wasNull()
+                    if (!isNull) {
+                      val dateAsUnixtimestamp = dateTimeStringToEpoch(tmp)
+                      if (dateAsUnixtimestamp <= 0L)
+                        ps.setObject(i, "1971-01-01 00:00:00")
+                      else {
+                        if (dateAsUnixtimestamp >= 4296677295L)
+                          ps.setObject(i, "2106-01-01 00:00:00")
+                        else
+                          ps.setObject(i, tmp)
+                      }
+                    } else
+                      ps.setNull(i, Types.DATE)
+                  }
+                }
+                i + 1
+            }
+
+            ps.addBatch()
+            if (counter == batch_size) {
+              ps.executeBatch()
+              0
+            } else
+              counter + 1
+        }
+        ps.executeBatch()
+
+        val rsRowCount = sess.createStatement.executeQuery(
+          s""" select t.total_rows
+             |from system.tables t
+             |where t.database = '${table.schema}' and
+             |      t.name     = '${table.name}' """.stripMargin
+          )
+        rsRowCount.next()
+        val rowCount = rsRowCount.getLong(1)
+        rsRowCount.close()
+        rowCount
+      }.ensuring(
+        ZIO.logDebug("End of the blocking operation in recreateTableCopyData - batch inserts.")
+      ).catchAll {
+        case e: Exception =>
+          ZIO.logError(s"${e.getMessage} - ${e.getCause} - ${e.getStackTrace.mkString("Array(", ", ", ")")}") *>
+            ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+
+      _ <- ZIO.logInfo(s"Copied $rows rows to ${table.schema}.${table.name}")
+
+    } yield rows
 
   def createDatabases(schemas: Set[String]): ZIO[Any, Exception, Unit] = for {
     _ <- ZIO.unit

@@ -309,9 +309,74 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
     rs <- rsEffect
   } yield rs
 
+/*
   def saveTableList(tables: List[Table]): ZIO[Any,Exception,Unit] = for {
     taskId <- getTaskIdFromSess
     saveTablesEffects = tables.map{t =>
+      ZIO.attemptBlocking {
+        val query: String =
+          s"insert into ora_to_ch_tasks_tables(id_task,schema_name,table_name) values($taskId,'${t.schema}','${t.name}') "
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        rs.next() //todo: ??? maybe remove
+        sess.commit()
+        rs.close()
+      }.catchAll {
+        case e: Exception => ZIO.logError(e.getMessage) *>
+          ZIO.fail(new Exception(s"${e.getMessage}"))
+      }
+    }
+    _ <- ZIO.collectAll(saveTablesEffects)
+  } yield ()*/
+
+  /**
+   * Get oracle dataset for update clickhouse table.
+   * Select part contains only primary key columns plus update_fields.
+   * In this method we only use next Json keys:
+   * name - table for update fields in clickhouse.
+   * update_fields - fields that will updated in clickhouse table from oracle data.
+   * where_filter - filter when select from oracle table.
+   * ins_select_order_by
+  */
+  def getDataResultSetForUpdate(table: Table, fetch_size: Int, pkColumns: List[String]):
+  ZIO[Any, Exception, ResultSet] = for {
+    _ <- ZIO.unit
+    selectColumns = s"${pkColumns.mkString(",")},${table.updateColumns()} "
+    rsEffect = ZIO.attemptBlocking {
+      val dataQuery =
+        table.keyType match {
+          case PrimaryKey => s"select $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
+          case _ => throw new Exception("Update fields on table without primary key not possible.")
+        }
+      //********************* CONTEXT *************************
+      val ctxDate: String = table.plsql_context_date.getOrElse(" ")
+      if (table.plsql_context_date.nonEmpty) {
+        val contextSql =
+          s"""
+             | begin
+             |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+             |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+             |end;
+             |""".stripMargin
+        val prec = sess.prepareCall(contextSql)
+        prec.execute()
+      } else ()
+      //*******************************************************
+      val dateQueryWithOrd: String = s"$dataQuery ${table.orderBy()}"
+
+      val dataRs = sess.createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
+        .executeQuery(dateQueryWithOrd)
+      dataRs.setFetchSize(fetch_size)
+      dataRs
+    }.catchAll {
+      case e: Exception => ZIO.logError(e.getMessage) *>
+        ZIO.fail(new Exception(s"${e.getMessage}"))
+    }
+    rs <- rsEffect
+  } yield rs
+
+  def saveTableList(tables: List[Table]): ZIO[Any, Exception, Unit] = for {
+    taskId <- getTaskIdFromSess
+    saveTablesEffects = tables.map { t =>
       ZIO.attemptBlocking {
         val query: String =
           s"insert into ora_to_ch_tasks_tables(id_task,schema_name,table_name) values($taskId,'${t.schema}','${t.name}') "
@@ -393,14 +458,14 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
         }
   } yield ()
 
-  def setTableCopied(table: Table, rowCount: Long): ZIO[Any, Exception, Unit] = for {
+  def setTableCopied(table: Table, rowCount: Long, status: String = "finished"): ZIO[Any, Exception, Unit] = for {
     taskId <- getTaskIdFromSess
     _ <-
       ZIO.attemptBlocking {
         val query: String =
           s""" update ora_to_ch_tasks_tables t
              |   set end_datetime = sysdate,
-             |             state  = 'finished',
+             |             state  = '$status',
              |             copied_records_count = $rowCount,
              |             speed_rows_sec = (case
              |                                when ((sysdate - t.begin_datetime)*24*60*60) != 0
@@ -537,7 +602,8 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
                 ot.partition_by,
                 ot.notnull_columns,
                 ot.where_filter,
-                ot.sync_by_column_max)
+                ot.sync_by_column_max,
+                ot.update_fields)
           }
         }
       }

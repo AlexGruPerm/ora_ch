@@ -12,7 +12,8 @@ case class OneTable(recreate: Int = 1,
                     partition_by: Option[String] = Option.empty[String],
                     notnull_columns: Option[List[String]] = Option.empty[List[String]],
                     where_filter: Option[String] = Option.empty[String],
-                    sync_by_column_max: Option[String] = Option.empty[String]
+                    sync_by_column_max: Option[String] = Option.empty[String],
+                    update_fields: Option[List[String]] = Option.empty[List[String]]
                    )
 
 case class SrcTable(schema: String, tables: List[OneTable] = List.empty[OneTable])
