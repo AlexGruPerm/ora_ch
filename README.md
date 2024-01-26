@@ -1,7 +1,7 @@
 # orach
 
-This application is 
+This application is about
 
 <picture>
- <source media="(prefers-color-scheme: dark)" srcset="https://ibb.co/ct7DjvM">
+ <source media="(prefers-color-scheme: dark)"<img src="https://i.ibb.co/7V62qz8/2023-01-11-23-49-01.jpg">
 </picture>
