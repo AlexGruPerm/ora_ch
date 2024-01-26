@@ -21,9 +21,8 @@ nocache;
 create table ora_to_ch_tasks(
  id              integer primary key,
  ora_sid         integer not null,
- state           varchar2(32) default 'none',-- executing, finished
+ state           varchar2(32) default 'none',
  begin_datetime  date default sysdate,
- --task_json clob
  end_datetime    date
 );
 
@@ -33,7 +32,7 @@ create table ora_to_ch_tasks_tables(
  table_name           varchar2(32) not null,
  begin_datetime       date,
  end_datetime         date,
- state                varchar2(32) default 'none',-- copying, finished
+ state                varchar2(32) default 'none',
  copied_records_count integer default 0,
  speed_rows_sec       number,
  constraint uk_ora_to_ch_tasks_tables unique(id_task,schema_name,table_name)

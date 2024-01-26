@@ -13,7 +13,7 @@ Also, you can update columns in clickhouse table from oracle table.
 How it works:
 When you want load (recreate clickhouse table) date from oracle into clickhouse you can use Json like this:
 
-```
+```json
 {
 "servers":{
 "oracle":{
@@ -25,7 +25,7 @@ When you want load (recreate clickhouse table) date from oracle into clickhouse 
 "password" : "password"
 },
 "clickhouse":{
-"ip": "15.6.7.8",
+"ip": "5.6.7.8",
 "port": 8123,
 "db" : "default",
 "batch_size" : 20000,
@@ -68,6 +68,88 @@ schema - schema name
 
 you can make post request on 2 addresses:
 
-web_service_url:8081/task
-web_service_url:8081/calc
+web_service_url:8081/task for data loading/appending</br>
+web_service_url:8081/calc for make calculation and loading results back into oracle. 
+
+For work with service you need make oracle metadata tables:
+
+```  sql
+drop table ora_to_ch_tasks_tables;
+drop table ora_to_ch_tasks;
+drop sequence s_ora_to_ch_tasks;
+
+create sequence s_ora_to_ch_tasks
+minvalue 1
+maxvalue 9999999999999999999999999999
+start with 1
+increment by 1
+nocache;
+
+create sequence s_ora_to_ch_views_query_log
+minvalue 1
+maxvalue 9999999999999999999999999999
+start with 1
+increment by 1
+nocache;
+
+create table ora_to_ch_tasks(
+ id              integer primary key,
+ ora_sid         integer not null,
+ state           varchar2(32) default 'none',
+ begin_datetime  date default sysdate,
+ end_datetime    date
+);
+
+create table ora_to_ch_tasks_tables(
+ id_task              integer not null constraint fk_ora_to_ch_tbl_tsk references ora_to_ch_tasks(id) on delete cascade,
+ schema_name          varchar2(32) not null,
+ table_name           varchar2(32) not null,
+ begin_datetime       date,
+ end_datetime         date,
+ state                varchar2(32) default 'none',
+ copied_records_count integer default 0,
+ speed_rows_sec       number,
+ constraint uk_ora_to_ch_tasks_tables unique(id_task,schema_name,table_name)
+);
+
+create table ora_to_ch_views_query_log(
+ id             integer constraint pk_ora_to_ch_views_query_log primary key,
+ id_vq          integer not null constraint fk_orach_vq_log_vq references ora_to_ch_views_query(id) on delete cascade,
+ ora_sid        integer,
+ begin_calc     date,
+ end_calc       date,
+ begin_copy     date,
+ end_copy       date,
+ state          varchar2(32) default 'none'
+);
+
+create table ora_to_ch_views_query
+(
+  id         integer not null,
+  view_name  varchar2(32),
+  ch_table   varchar2(32) not null,
+  ora_table  varchar2(32) not null,
+  query_text clob
+);
+
+alter table ora_to_ch_views_query
+  add primary key (id);
+
+create table ora_to_ch_vq_params
+(
+  id_vq       integer not null,
+  param_name  varchar2(32) not null,
+  param_type  varchar2(32) not null,
+  param_order integer not null
+);
+
+alter table ora_to_ch_vq_params
+  add constraint fk_otc_params_vq foreign key (id_vq)
+  references ora_to_ch_views_query (id);
+```
+
+Examples:
+
+
+
 
