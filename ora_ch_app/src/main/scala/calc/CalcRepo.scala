@@ -21,9 +21,7 @@ trait CalcRepo {
 case class ImplCalcRepo(ref: Ref[ReqCalc]) extends CalcRepo {
 
   def create(task: ReqCalc): Task[CalcId] = for {
-    currStatus <- getState
     _ <- ref.update(_ => task)
-    _ <- ZIO.logInfo(s"repo state changed: ${currStatus.state} -> ${task.state}")
   } yield task.id
 
   def updateCalcId(calcId: Int): UIO[Unit] = ref.update(c => c.copy(id =calcId))

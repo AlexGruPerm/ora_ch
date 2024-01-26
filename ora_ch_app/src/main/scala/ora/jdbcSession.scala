@@ -52,16 +52,17 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
       case e: Exception => ZIO.logError(e.getMessage) *>
         ZIO.fail(new Exception(s"${e.getMessage}"))
     }
+    _ <- ZIO.logInfo(s"AFTER insertViewQueryLog id=$id")
   } yield id
 
-  def saveEndCalculation(): ZIO[Any, Exception, Unit] = for {
-    _ <- ZIO.logInfo(s"saveEndCalculation calcId=$calcId")
+  def saveEndCalculation(id: Int): ZIO[Any, Exception, Unit] = for {
+    _ <- ZIO.logInfo(s"saveEndCalculation for calcId = $calcId id=$id")
     _ <- ZIO.attemptBlocking {
       val query: String =
         s""" update ora_to_ch_views_query_log l
            |   set l.end_calc = sysdate,
            |       l.state    = 'copying'
-           | where l.id = $calcId
+           | where l.id = $id
            | """.stripMargin
       val rs: ResultSet = sess.createStatement.executeQuery(query)
       rs.next()
@@ -73,13 +74,13 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
     }
   } yield ()
 
-  def saveBeginCopying(): ZIO[Any, Exception, Unit] = for {
+  def saveBeginCopying(id: Int): ZIO[Any, Exception, Unit] = for {
     _ <- ZIO.attemptBlocking {
       val query: String =
         s""" update ora_to_ch_views_query_log l
            |   set l.begin_copy = sysdate,
            |       l.state    = 'copying'
-           | where l.id = $calcId
+           | where l.id = $id
            | """.stripMargin
       val rs: ResultSet = sess.createStatement.executeQuery(query)
       sess.commit()
@@ -90,13 +91,13 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
     }
   } yield ()
 
-  def saveEndCopying(): ZIO[Any, Exception, Unit] = for {
+  def saveEndCopying(id: Int): ZIO[Any, Exception, Unit] = for {
     _ <- ZIO.attemptBlocking {
       val query: String =
         s""" update ora_to_ch_views_query_log l
            |   set l.end_copy = sysdate,
            |       l.state    = 'finished'
-           | where l.id = $calcId
+           | where l.id = $id
            | """.stripMargin
       val rs: ResultSet = sess.createStatement.executeQuery(query)
       sess.commit()
@@ -231,7 +232,6 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
       ps.executeBatch()
 
       sess.commit()
-      sess.close()
       rs.close()
     }.catchAll {
        e: Throwable => ZIO.logError(s"insertRsDataInTable tableName=$tableName exception : ${e.getMessage}") *>
@@ -549,7 +549,7 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
 
 trait jdbcSession {
   def sessTask(debugMsg: String): ZIO[Any,Exception,oraSessTask]
-  def sessCalc(debugMsg: String): ZIO[Any,Exception,oraSessCalc]
+  def sessCalc(vqId: Int = 0, debugMsg: String): ZIO[Any,Exception,oraSessCalc]
   val props = new Properties()
 }
 
@@ -564,9 +564,9 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
      session <- oraConnectionTask()
    } yield session
 
-  def sessCalc(debugMsg: String): ZIO[Any, Exception, oraSessCalc] = for {
+  def sessCalc(vqId: Int, debugMsg: String): ZIO[Any, Exception, oraSessCalc] = for {
     _ <- ZIO.logInfo(s"[sessCalc] jdbcSessionImpl.sess [$debugMsg] call oraConnectionCalc")
-    session <- oraConnectionCalc()
+    session <- oraConnectionCalc(vqId)
   } yield session
 
   private def oraConnectionTask():  ZIO[Any,Exception,oraSessTask] = for {
@@ -598,17 +598,17 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
       case e: Exception => ZIO.logError(s" getPid in oraConnection - ${e.getMessage}") *>
         ZIO.fail(new Exception(s"${e.getMessage} - ${oraRef.getUrl()}"))
     }
-    _ <- ZIO.logInfo(s"  >>>>>>>>>>>>>>>>>>>>>  Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion} SID = $sid")
+    _ <- ZIO.logInfo(s"Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion} SID = $sid")
   } yield sess
 
-  private def oraConnectionCalc(): ZIO[Any, Exception, oraSessCalc] = for {
+  private def oraConnectionCalc(vqId: Int): ZIO[Any, Exception, oraSessCalc] = for {
     oraConn <- oraRef.getConnection()
     sessEffect = ZIO.attemptBlocking {
       val conn = oraConn
       conn.setAutoCommit(false)
       conn.setClientInfo("OCSID.MODULE", "ORATOCH")
       conn.setClientInfo("OCSID.ACTION", s"unknown")
-      oraSessCalc(conn, 0)
+      oraSessCalc(conn, vqId)
     }.catchAll {
       case e: Exception => ZIO.logError(e.getMessage) *>
         ZIO.fail(new Exception(s"${e.getMessage} - ${oraRef.getUrl()}"))
@@ -621,7 +621,7 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
       case e: Exception => ZIO.logError(s" getPid in oraConnection - ${e.getMessage}") *>
         ZIO.fail(new Exception(s"${e.getMessage} - ${oraRef.getUrl()}"))
     }
-    _ <- ZIO.logInfo(s"  >>>>>>>>>>>>>>>>>>>>>  Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion} SID = $sid")
+    _ <- ZIO.logInfo(s"Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion} SID = $sid")
   } yield sess
 
 }

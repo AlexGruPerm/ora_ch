@@ -123,7 +123,7 @@ object WServer {
     taskId <- repo.getCalcId
     _ <- ZIO.logInfo(s"Repo currStatus = ${currStatus.state}")
     _ <- ZIO.fail(new Exception(
-        s" already running id = $taskId ,look at tables: xxx"))
+        s" already running id = $taskId ,look at tables: ora_to_ch_views_query_log"))
       .when(currStatus.state != Wait)
   } yield ()
   }
@@ -156,16 +156,19 @@ object WServer {
     }
   } yield response
 
+  private def addOnInterr[R,E,A](eff: ZIO[R,E,A],desc: String): ZIO[R,E,A] =
+    eff.onInterrupt(CalcLogic.debugInterruption(desc))
+
   private def calcAndCopy(reqCalc: ReqCalcSrc): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo <- ZIO.service[ImplCalcRepo]
     _ <- currStatusCheckerCalc()
-    layerOraConn = OraConnRepoImpl.layer(reqCalc.servers.oracle)
-    layerOra = ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer
-    meta <- CalcLogic.getCalcMeta(reqCalc).provide(layerOraConn,layerOra,ZLayer.succeed(SessCalc))
-    calc = CalcLogic.startCalculation(reqCalc,meta).onInterrupt(CalcLogic.debugInterruption("calc"))
-    copy = CalcLogic.copyDataChOra(reqCalc,meta).onInterrupt(CalcLogic.debugInterruption("copy"))
-    _ <- (calc *> copy).provide(
-      layerOraConn,
+    meta = CalcLogic.getCalcMeta(reqCalc)
+    _ <- {meta.flatMap{meta =>
+                       addOnInterr(CalcLogic.startCalculation(reqCalc,meta),"calc") *>
+                       addOnInterr(CalcLogic.copyDataChOra(reqCalc,meta),"copy")
+                      }
+         }.provide(
+      OraConnRepoImpl.layer(reqCalc.servers.oracle),
       ZLayer.succeed(repo),
       ZLayer.succeed(reqCalc.servers.oracle),
       jdbcSessionImpl.layer,

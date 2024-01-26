@@ -21,7 +21,7 @@ object CalcLogic {
 
   def getCalcMeta(reqCalc: ReqCalcSrc): ZIO[jdbcSession,Throwable,ViewQueryMeta] = for {
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sessCalc("getCalcMeta")
+    ora <- oraSession.sessCalc(debugMsg = "getCalcMeta")
     _ <- ZIO.logInfo(s"getCalcMeta Oracle SID = ${ora.getPid}")
     vqMeta <- ora.getVqMeta(reqCalc.view_query_id)
   } yield vqMeta
@@ -56,21 +56,24 @@ object CalcLogic {
   */
   private def beginQueryLog(idVq: Int): ZIO[jdbcSession,Throwable, Int] = for {
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sessCalc("beginQueryLog")
+    ora <- oraSession.sessCalc(debugMsg = "beginQueryLog")
     id <- ora.insertViewQueryLog(idVq)
   } yield id
 
-  private def saveEndCalculation(): ZIO[jdbcSession, Throwable, Unit] = for {
-    _ <- ZIO.logInfo(s"saveEndCalculation..........")
+  private def saveEndCalculation(): ZIO[ImplCalcRepo with jdbcSession, Throwable, Unit] = for {
+    repo <- ZIO.service[ImplCalcRepo]
+    calcId <- repo.getCalcId
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sessCalc("saveEndCalculation")
-    _ <- ora.saveEndCalculation()
+    ora <- oraSession.sessCalc(debugMsg = s"saveEndCalculation for calcId=$calcId")
+    _ <- ora.saveEndCalculation(calcId)
   } yield ()
 
-  private def saveEndCopying(): ZIO[jdbcSession, Throwable, Unit] = for {
+  private def saveEndCopying(): ZIO[ImplCalcRepo with jdbcSession, Throwable, Unit] = for {
+    repo <- ZIO.service[ImplCalcRepo]
+    calcId <- repo.getCalcId
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sessCalc("saveEndCopying")
-    _ <- ora.saveEndCopying()
+    ora <- oraSession.sessCalc(debugMsg = "saveEndCopying")
+    _ <- ora.saveEndCopying(calcId)
   } yield ()
 
   /**
@@ -78,7 +81,7 @@ object CalcLogic {
    * 2.
   */
   def startCalculation(reqCalc: ReqCalcSrc, meta: ViewQueryMeta): ZIO[ImplCalcRepo with jdbcSession with jdbcChSession, Throwable, Unit] = for {
-    _ <- ZIO.logInfo("startCalculation.............................")
+    _ <- ZIO.logDebug("startCalculation.............................")
     _ <- ZIO.logDebug("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
     _ <- ZIO.logDebug(s"view Name = ${meta.viewName}")
     _ <- ZIO.logDebug("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
@@ -98,7 +101,7 @@ object CalcLogic {
     _ <- repo.setState(CalcState(Calculation))
     stateAfter <- repo.getState
     calcId <- repo.getCalcId
-    _ <- ZIO.logDebug(s"[startCalc] [$calcId] State: ${stateBefore.state} -> ${stateAfter.state} ")
+    _ <- ZIO.logDebug(s"[startCalc] calcId=[$calcId] State: ${stateBefore.state} -> ${stateAfter.state} ")
     id <- beginQueryLog(calc.id_vq)
     _ <- repo.updateCalcId(id)
     _ <- meta.viewName match {
@@ -116,9 +119,10 @@ object CalcLogic {
     ch <- chSession.sess(0) //todo: 0 - just for debug, there is no task when we calc.
     chTableRs <- ch.getChTableResultSet(meta.chTable)
     oraSession <- ZIO.service[jdbcSession]
-    ora <- oraSession.sessCalc("copyDataChOra")
+    ora <- oraSession.sessCalc(debugMsg = "copyDataChOra")
     _ <- repo.setState(CalcState(Copying))
-    _ <- ora.saveBeginCopying()
+    calcId <- repo.getCalcId
+    _ <- ora.saveBeginCopying(calcId)
     _ <- ora.insertRsDataInTable(chTableRs,meta.oraTable)
     _ <- repo.setState(CalcState(Wait))
     stateAfter <- repo.getState
