@@ -32,6 +32,22 @@ object WServer {
     _ <- ora.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
   } yield ()
 
+  private def copyTableEffect(sess: oraSessTask,sessCh: chSess,table: Table, fetch_size: Int, batch_size: Int):
+  ZIO[ImplTaskRepo, Throwable, Unit] =
+    sess.setTableBeginCopy(table) *>
+      sessCh.getMaxColForSync(table).flatMap { maxValAndCnt =>
+        updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt).repeat(Schedule.spaced(5.second)).fork *>
+          sessCh.recreateTableCopyData(
+              table,
+              sess.getDataResultSet(table, fetch_size, maxValAndCnt),
+              batch_size,
+              maxValAndCnt)
+            .flatMap {
+              rc => sess.setTableCopied(table, rc)
+            }
+      }
+
+
   private def startTask(newtask: ReqNewTask): ZIO[ImplTaskRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
     _ <- ZIO.logDebug(s"This is a debug message 2")
     repo <- ZIO.service[ImplTaskRepo]
@@ -56,15 +72,14 @@ object WServer {
     sessCh <- jdbcCh.sess(taskId)
     task <- repo.ref.get
     setSchemas = task.tables.map(_.schema).toSet diff Set("system","default","information_schema")
-
     _ <- sess.saveTableList(task.tables)
     _ <- sessCh.createDatabases(setSchemas)
     _ <- sess.setTaskState("executing")
     fetch_size = task.oraServer.map(_.fetch_size).getOrElse(1000)
     batch_size = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
+    copyEffects = task.tables.map { table => copyTableEffect(sess,sessCh,table,fetch_size,batch_size)
 
-    copyEffects = task.tables.map { table =>
-      sess.setTableBeginCopy(table) *>
+/*      sess.setTableBeginCopy(table) *>
         sessCh.getMaxColForSync(table).flatMap { maxValAndCnt =>
             updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt).repeat(Schedule.spaced(5.second)).fork *>
             sessCh.recreateTableCopyData(
@@ -75,7 +90,9 @@ object WServer {
               .flatMap {
                 rc => sess.setTableCopied(table, rc)
               }
-          }.catchAll{
+          }*/
+
+          .catchAll{
             case e: Exception => ZIO.logError(s"catchAll in startTask - ${e.getMessage}") *>
               repo.setState(TaskState(Wait)) *>
               ZIO.fail(new Exception(e.getMessage))
