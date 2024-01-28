@@ -77,7 +77,13 @@ For work with service you to need make oracle metadata tables:
 ```  sql
 drop table ora_to_ch_tasks_tables;
 drop table ora_to_ch_tasks;
+
+drop table ora_to_ch_vq_params;
+drop table ora_to_ch_views_query_log;
+ora_to_ch_views_query;
+
 drop sequence s_ora_to_ch_tasks;
+drop sequence s_ora_to_ch_views_query_log;
 
 create sequence s_ora_to_ch_tasks
 minvalue 1
