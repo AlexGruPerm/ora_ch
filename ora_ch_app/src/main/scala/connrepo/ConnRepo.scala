@@ -4,7 +4,7 @@ import conf.OraServer
 import oracle.jdbc.OracleDriver
 import zio.{Ref, Scope, ZIO, ZLayer}
 
-import java.sql.{Connection, DriverManager}
+import java.sql.{Connection, DriverManager, ResultSet}
 import java.util.Properties
 
 /**
@@ -25,7 +25,6 @@ trait OraConnRepo {
 case class OraConnRepoImpl(conf: OraServer, ref: Ref[Connection]) extends OraConnRepo{
   def getConnection(): ZIO[Any, Nothing, Connection] = ref.get
   def getUrl(): ZIO[Any, Nothing, String] = ZIO.succeed(conf.getUrl())
-  //TODO: move here all from jdbcSession !!!
 }
 
 /**

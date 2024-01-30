@@ -2,7 +2,7 @@ package ora
 
 import calc.{VQParams, ViewQueryMeta}
 import column.OraChColumn
-import zio.{Task, _}
+import zio.{Task, ZIO, _}
 import conf.OraServer
 import oracle.jdbc.OracleDriver
 import request.SrcTable
@@ -476,7 +476,6 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
              |       t.schema_name = '${table.schema}' and
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
-        rs.next() //todo: ??? maybe remove
         sess.commit()
         rs.close()
       }.catchAll {
@@ -485,30 +484,31 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
       }
   } yield ()
 
-  def taskFinished: ZIO[Any, Exception, Unit] = for {
-    taskId <- getTaskIdFromSess
-    _ <-
-      ZIO.attemptBlocking {
-        val query: String =
-          s"update ora_to_ch_tasks set end_datetime = sysdate,state='finished' where id=$taskId"
-        val rs: ResultSet = sess.createStatement.executeQuery(query)
-        rs.next() //todo: ??? maybe remove
-        sess.commit()
-        rs.close()
-      }.catchAll {
-        case e: Exception => ZIO.logError(e.getMessage) *>
+  class ZioWithCatchLog[A](a: ZIO[Any, Throwable, A]){
+    def catchAllLogError(): ZIO[Any, Throwable, A] =
+      a.catchAll{
+        e: Throwable => ZIO.logError(e.getMessage) *>
           ZIO.fail(new Exception(s"${e.getMessage}"))
       }
-  } yield ()
+  }
+  object ZioWithCatchLog {
+    implicit def implicitZaioAddCatchAll[A](a: ZIO[Any, Throwable, A]): ZioWithCatchLog[A] =
+      new ZioWithCatchLog(a)
+  }
 
-/*  def closeConnection: ZIO[Any, Nothing, Unit] = for {
-    _ <- ZIO.logInfo("Closing Oracle Task connection")
-    _ <- ZIO.attemptBlocking {
-        sess.close()
-      }.catchAll {
-        case e: Exception => ZIO.logError(s"Closing Oracle Task connection - ${e.getMessage}").unit
-      }
-  } yield ()*/
+import ZioWithCatchLog._
+
+def taskFinished: ZIO[Any, Throwable, Unit] = for {
+  taskId <- getTaskIdFromSess
+  eff = ZIO.attemptBlocking {
+      val query: String =
+        s"update ora_to_ch_tasks set end_datetime = sysdate, state='finished' where id = $taskId"
+      val rs: ResultSet = sess.createStatement.executeQuery(query)
+      sess.commit()
+      rs.close()
+    }
+  _ <- eff.tapError(er => ZIO.logError(er.getMessage))//.catchAllLogError()
+} yield ()
 
   def getKeyType(schema: String, tableName: String): ZIO[Any,Exception,(KeyType,String)] = for {
     _ <- ZIO.unit
