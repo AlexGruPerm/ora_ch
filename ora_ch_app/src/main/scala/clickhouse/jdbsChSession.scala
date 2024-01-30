@@ -48,7 +48,7 @@ case class chSess(sess : Connection, taskId: Int){
     schema = updateTable.schema
     _ <- ZIO.attemptBlocking {
       val pkColsStr = pkColumns.mkString(",")
-      val updateColsSql = updateTable.update_fields.getOrElse(List("empty_update_fields")).map{
+      val updateColsSql = updateTable.update_fields.getOrElse("empty_update_fields").split(",").map{
         col=>
         s"$col = joinGet($schema.${updTable.name}, '$col', $pkColsStr)"
       }.mkString(",")
@@ -221,7 +221,7 @@ case class chSess(sess : Connection, taskId: Int){
               oraRs.getMetaData.getPrecision(i),
           oraRs.getMetaData.getScale(i),
           oraRs.getMetaData.isNullable(i),
-          table.notnull_columns.getOrElse(List.empty[String])
+          table.notnull_columns
         )).toList
     nakedCols = cols.map(chCol => chCol.name).mkString(",\n")
     colsScript = cols.map(chCol => chCol.clColumnString).mkString(",\n")
@@ -391,7 +391,7 @@ case class chSess(sess : Connection, taskId: Int){
               oraRs.getMetaData.getPrecision(i),
             oraRs.getMetaData.getScale(i),
             oraRs.getMetaData.isNullable(i),
-            table.notnull_columns.getOrElse(List.empty[String])
+            table.notnull_columns
           )).toList
       nakedCols = cols.map(chCol => chCol.name).mkString(",\n")
       colsScript = cols.map(chCol => chCol.clColumnString).mkString(",\n")

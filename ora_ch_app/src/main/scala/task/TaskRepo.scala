@@ -15,6 +15,7 @@ trait TaskRepo {
   def getTaskId: UIO[Int]
   def setState(newState: TaskState): UIO[Unit]
   def getState: UIO[TaskState]
+  def setTaskId(taskId: Int): UIO[Unit]
   def clearTask: UIO[Unit]
 }
 
@@ -33,6 +34,8 @@ case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
     _ <- ref.update(wst => wst.copy(state = newState))
     _ <- ZIO.logInfo(s"repo state changed: ${currStatus.state} -> ${newState.state}")
   } yield ()
+
+  def setTaskId(taskId: Int): UIO[Unit] = ref.update(wst => wst.copy(id = taskId))
 
   def getState: UIO[TaskState] =
     ref.get.map(_.state)

@@ -33,10 +33,11 @@ object OraChColumn {
             precision: Int,
             scale: Int,
             isNullable: Int,
-            notnull_columns: List[String]): OraChColumn = {
+            notnull_columns: Option[String]): OraChColumn = {
 
     val (nnLeftSide,nnRightSide) =
-      if (isNullable == 1 && name.toLowerCase != "rn" && !notnull_columns.map(_.toLowerCase).contains(name.toLowerCase))
+      if (isNullable == 1 && name.toLowerCase != "rn" &&
+        !notnull_columns.getOrElse("empty_fields").split(",").map(_.toLowerCase).contains(name.toLowerCase))
       ("Nullable(",")")
     else ("","")
 
@@ -53,6 +54,8 @@ object OraChColumn {
       }
 
     val clColumnString: String = s"$name $nnLeftSide$getChCol$nnRightSide "
+
+    println(s"OraChColumn.apply clColumnString = $clColumnString")
 
     new OraChColumn(
       name,

@@ -74,17 +74,20 @@ object WServer {
 
   private def startTask(newtask: ReqNewTask): ZIO[ImplTaskRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
     _ <- ZIO.logDebug(s"This is a debug message 2")
+    _ <- ZIO.logDebug(s" newtask = $newtask")
+    oraSess <- ZIO.service[jdbcSession]
     repo <- ZIO.service[ImplTaskRepo]
     jdbcCh <- ZIO.service[jdbcChSession]
-    oraSess <- ZIO.service[jdbcSession]
     sess <- oraSess.sessTask("startTask")
     taskId <- sess.getTaskIdFromSess
+    //getTables - takes a relatively long time to complete.
+    //set new taskId before calling getTables
+    _ <- repo.setTaskId(taskId)
     t <- sess.getTables(newtask.schemas)
     wstask = WsTask(id = taskId,
       state = TaskState(Ready, Option.empty[Table]),
       oraServer = Some(newtask.servers.oracle),
       clickhouseServer = Some(newtask.servers.clickhouse),
-      mode = newtask.servers.config,
       tables = t)
     _ <- repo.create(wstask)
     stateBefore <- repo.getState
@@ -92,7 +95,6 @@ object WServer {
     stateAfter <- repo.getState
     taskId <- repo.getTaskId
     _ <- ZIO.logDebug(s"[startTask] [${taskId}] State: ${stateBefore.state} -> ${stateAfter.state} ")
-    taskId <- repo.getTaskId
     sessCh <- jdbcCh.sess(taskId)
     task <- repo.ref.get
     setSchemas = task.tables.map(_.schema).toSet diff Set("system","default","information_schema")
@@ -102,7 +104,7 @@ object WServer {
     fetch_size = task.oraServer.map(_.fetch_size).getOrElse(1000)
     batch_size = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
     copyEffects = task.tables.map {table =>
-        ZIO.ifZIO(ZIO.succeed(table.update_fields.getOrElse(List.empty).nonEmpty))(
+        ZIO.ifZIO(ZIO.succeed(table.update_fields.nonEmpty))(
             updateTableColumns(sess,sessCh,table.copy(keyType = PrimaryKey),fetch_size,batch_size),
             copyTableEffect(sess,sessCh,table,fetch_size,batch_size)
           )
@@ -176,6 +178,7 @@ object WServer {
                ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer,
                ZLayer.succeed(SessCalc)
              ).forkDaemon
+
              sched = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
              taskId <- repo.getTaskId
                .filterOrFail(_ != 0)(0.toString)

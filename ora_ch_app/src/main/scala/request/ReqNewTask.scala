@@ -1,26 +1,26 @@
 package request
 
+import common.Types.OptStrint
 import conf.{ClickhouseServer, Mode, ModeType, OraServer, Parallel, Sequentially}
 import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
 case class OneTable(recreate: Int = 1,
                     name: String,
-                    plsql_context_date: Option[String] = Option.empty[String],
-                    pk_columns: Option[String] = Option.empty[String],
-                    only_columns: Option[List[String]] = Option.empty[List[String]],
-                    ins_select_order_by: Option[String] = Option.empty[String],
-                    partition_by: Option[String] = Option.empty[String],
-                    notnull_columns: Option[List[String]] = Option.empty[List[String]],
-                    where_filter: Option[String] = Option.empty[String],
-                    sync_by_column_max: Option[String] = Option.empty[String],
-                    update_fields: Option[List[String]] = Option.empty[List[String]]
+                    plsql_context_date:  OptStrint = Option.empty[String],
+                    pk_columns:          OptStrint = Option.empty[String],
+                    only_columns:        OptStrint = Option.empty[String],
+                    ins_select_order_by: OptStrint = Option.empty[String],
+                    partition_by:        OptStrint = Option.empty[String],
+                    notnull_columns:     OptStrint = Option.empty[String],
+                    where_filter:        OptStrint = Option.empty[String],
+                    sync_by_column_max:  OptStrint = Option.empty[String],
+                    update_fields:       OptStrint = Option.empty[String]
                    )
 
 case class SrcTable(schema: String, tables: List[OneTable] = List.empty[OneTable])
 
 case class Servers(oracle: OraServer,
-                   clickhouse: ClickhouseServer,
-                   config : Mode = Mode()
+                   clickhouse: ClickhouseServer
                   )
 
 case class ReqNewTask(servers: Servers, schemas: List[SrcTable] = List.empty[SrcTable])

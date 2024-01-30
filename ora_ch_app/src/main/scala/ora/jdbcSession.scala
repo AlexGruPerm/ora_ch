@@ -246,10 +246,11 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
   def getDataResultSet(table: Table, fetch_size: Int, maxColCh: Option[MaxValAndCnt]): ZIO[Any, Exception, ResultSet] = for {
     _ <- ZIO.unit
     rsEffect = ZIO.attemptBlocking {
-      val dataQuery =
+      println(s"getDataResultSet table.only_columns = ${table.only_columns}")
+      val dataQuery = {
         table.keyType match {
           case ExtPrimaryKey =>
-            s"""select ${table.only_columns.getOrElse(List("*")).mkString(",")} from ${table.schema}.${table.name} ${
+            s"""select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
                 table.where_filter match {
                   case Some(where) => table.sync_by_column_max match
                    {case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
@@ -257,9 +258,9 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
                    }
                   case None => " "
                 }
-            }"""
+            }""".stripMargin
           case PrimaryKey | UniqueKey =>
-            s"""select ${table.only_columns.getOrElse(List("*")).mkString(",")} from ${table.schema}.${table.name} ${
+            s"""select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
               table.where_filter match {
                 case Some(where) => table.sync_by_column_max match {
                   case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
@@ -270,7 +271,7 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
             }""".stripMargin
           case RnKey =>
             s"""select row_number() over(order by null) as rn,t.* from (
-               |select ${table.only_columns.getOrElse(List("*")).mkString(",")} from ${table.schema}.${table.name} ${
+               |select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
               table.where_filter match {
                 case Some(where) => table.sync_by_column_max match {
                   case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
@@ -280,6 +281,8 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
               }
             }) t """.stripMargin
         }
+      }
+      println(s"dataQuery = $dataQuery")
       //********************* CONTEXT *************************
       val ctxDate: String = table.plsql_context_date.getOrElse(" ")
       if (table.plsql_context_date.nonEmpty){
@@ -342,11 +345,13 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
     _ <- ZIO.unit
     selectColumns = s"${pkColumns.mkString(",")},${table.updateColumns()} "
     rsEffect = ZIO.attemptBlocking {
-      val dataQuery =
+      val dataQuery = {
         table.keyType match {
           case PrimaryKey => s"select $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
           case _ => throw new Exception("Update fields on table without primary key not possible.")
         }
+      }
+      println(s"getDataResultSetForUpdate dataQuery = $dataQuery")
       //********************* CONTEXT *************************
       val ctxDate: String = table.plsql_context_date.getOrElse(" ")
       if (table.plsql_context_date.nonEmpty) {
