@@ -7,8 +7,8 @@ nohup curl -X POST http://localhost:8081/task -H 'Content-Type: application/json
      "port": 1521,
      "tnsname" : "nsser",
      "fetch_size" : 10000,
-     "user" : "dbadmin",
-     "password" : "dbadmin"
+     "user" : "orach",
+     "password" : "orach"
    },
    "clickhouse":{
      "ip": "10.206.215.9",
@@ -45,8 +45,8 @@ nohup curl -X POST http://localhost:8081/task -H 'Content-Type: application/json
      "port": 1521,
      "tnsname" : "nsser",
      "fetch_size" : 10000,
-     "user" : "dbadmin",
-     "password" : "dbadmin"
+     "user" : "orach",
+     "password" : "orach"
    },
    "clickhouse":{
      "ip": "10.206.215.9",
@@ -87,8 +87,8 @@ nohup curl -X POST http://localhost:8081/task -H 'Content-Type: application/json
      "port": 1521,
      "tnsname" : "nsser",
      "fetch_size" : 10000,
-     "user" : "dbadmin",
-     "password" : "dbadmin"
+     "user" : "orach",
+     "password" : "orach"
    },
    "clickhouse":{
      "ip": "10.206.215.9",
