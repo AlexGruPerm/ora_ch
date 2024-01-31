@@ -55,6 +55,7 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
     _ <- ZIO.logInfo(s"AFTER insertViewQueryLog id=$id")
   } yield id
 
+
   def saveEndCalculation(id: Int): ZIO[Any, Exception, Unit] = for {
     _ <- ZIO.logInfo(s"saveEndCalculation for calcId = $calcId id=$id")
     _ <- ZIO.attemptBlocking {
@@ -489,20 +490,6 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
       }
   } yield ()
 
-  class ZioWithCatchLog[A](a: ZIO[Any, Throwable, A]){
-    def catchAllLogError(): ZIO[Any, Throwable, A] =
-      a.catchAll{
-        e: Throwable => ZIO.logError(e.getMessage) *>
-          ZIO.fail(new Exception(s"${e.getMessage}"))
-      }
-  }
-  object ZioWithCatchLog {
-    implicit def implicitZaioAddCatchAll[A](a: ZIO[Any, Throwable, A]): ZioWithCatchLog[A] =
-      new ZioWithCatchLog(a)
-  }
-
-import ZioWithCatchLog._
-
 def taskFinished: ZIO[Any, Throwable, Unit] = for {
   taskId <- getTaskIdFromSess
   eff = ZIO.attemptBlocking {
@@ -512,7 +499,7 @@ def taskFinished: ZIO[Any, Throwable, Unit] = for {
       sess.commit()
       rs.close()
     }
-  _ <- eff.tapError(er => ZIO.logError(er.getMessage))//.catchAllLogError()
+  _ <- eff.tapError(er => ZIO.logError(er.getMessage))
 } yield ()
 
   def getKeyType(schema: String, tableName: String): ZIO[Any,Exception,(KeyType,String)] = for {

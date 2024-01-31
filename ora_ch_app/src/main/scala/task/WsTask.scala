@@ -1,7 +1,7 @@
 package task
 
 import common.{TaskState, Wait}
-import conf.{ClickhouseServer, Mode, OraServer}
+import conf.{ClickhouseServer, OraServer}
 import table.Table
 
 case class WsTask(
@@ -9,7 +9,6 @@ case class WsTask(
                   state: TaskState = TaskState(Wait,Option.empty[Table]),
                   oraServer: Option[OraServer] = Option.empty[OraServer],
                   clickhouseServer: Option[ClickhouseServer] = Option.empty[ClickhouseServer],
-                  mode : Mode = Mode(),
                   tables: List[Table] = List.empty[Table]
                  )
 

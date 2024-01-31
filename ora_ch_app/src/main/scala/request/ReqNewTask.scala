@@ -1,7 +1,7 @@
 package request
 
 import common.Types.OptStrint
-import conf.{ClickhouseServer, Mode, ModeType, OraServer, Parallel, Sequentially}
+import conf.{ClickhouseServer, OraServer}
 import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
 case class OneTable(recreate: Int = 1,
@@ -32,16 +32,6 @@ object EncDecReqNewTaskImplicits{
 
   implicit val encoderSrcTable: JsonEncoder[SrcTable] = DeriveJsonEncoder.gen[SrcTable]
   implicit val decoderSrcTable: JsonDecoder[SrcTable] = DeriveJsonDecoder.gen[SrcTable]
-
-  implicit val encoderModeType: JsonEncoder[ModeType] = DeriveJsonEncoder.gen[ModeType]
-  implicit val decoderModeType: JsonDecoder[ModeType] = JsonDecoder[String].map {
-    case "sequentially" => Sequentially
-    case "parallel" => Parallel
-    case anyValue => throw new Exception(s"Invalid value in field ret_type = $anyValue")
-  }
-
-  implicit val encoderRetType: JsonEncoder[Mode] = DeriveJsonEncoder.gen[Mode]
-  implicit val decoderRetType: JsonDecoder[Mode] = DeriveJsonDecoder.gen[Mode]
 
   implicit val encoderClickhouseServer: JsonEncoder[ClickhouseServer] = DeriveJsonEncoder.gen[ClickhouseServer]
   implicit val decoderClickhouseServer: JsonDecoder[ClickhouseServer] = DeriveJsonDecoder.gen[ClickhouseServer]
