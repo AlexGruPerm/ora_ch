@@ -21,8 +21,8 @@ When you want to load (recreate clickhouse table) date from oracle into clickhou
   "port": 1521,
   "tnsname" : "ora_tnsname",
   "fetch_size" : 10000,
-  "user" : "login",
-  "password" : "password"
+  "user" : "ora_login",
+  "password" : "ora_password"
   },
   "clickhouse":{
   "ip": "5.6.7.8",
@@ -31,18 +31,14 @@ When you want to load (recreate clickhouse table) date from oracle into clickhou
   "batch_size" : 20000,
   "user" : "ch_login",
   "password" : "ch_password"
-  },
-  "config":{
-  "mode":"sequentially"
   }
 },
   "schemas":[
     {"schema":"schema_in_oracle",
       "tables":[
                 {
-                  "recreate":1,
                   "name":"table_name",
-                  "where_filter":" rn <= 5000 "
+                  ....
                 }
               ]
     }
@@ -56,7 +52,7 @@ all possible keys:
 schema - schema name
   recreate: Int - 0,1 for guard, recreate table on clickhouse or not.
   name: String - table name
-  pk_columns:"date_start,date_end,id" - if you want any p.k. coluns
+  pk_columns:"date_start,date_end,id" - if you want any p.k. columns.
   only_columns: Array[String] - if you want to load just part of columns.
   ins_select_order_by: String - order by part when select data in oracle.
   partition_by: String - PARTITION BY() for clickhouse

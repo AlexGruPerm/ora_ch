@@ -124,6 +124,9 @@ object CalcLogic {
     calcId <- repo.getCalcId
     _ <- ora.saveBeginCopying(calcId)
     _ <- ora.insertRsDataInTable(chTableRs,meta.oraTable)
+      .tapError(er => ZIO.logError(er.getMessage) *>
+        repo.setState(CalcState(Wait))
+      )
     _ <- repo.setState(CalcState(Wait))
     stateAfter <- repo.getState
     _ <- saveEndCopying()

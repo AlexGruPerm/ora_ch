@@ -13,6 +13,8 @@ grant select any dictionary to ORACH;
 grant select any table to ORACH;
 grant unlimited tablespace to ORACH;
 grant update any table to ORACH;
+grant drop any table to orach;
+grant insert any table to orach;
 
 BEGIN
   DBMS_NETWORK_ACL_ADMIN.create_acl (

@@ -108,11 +108,9 @@ object WServer {
             updateTableColumns(sess,sessCh,table.copy(keyType = PrimaryKey),fetch_size,batch_size),
             copyTableEffect(sess,sessCh,table,fetch_size,batch_size)
           )
-          .catchAll{
-            case e: Exception => ZIO.logError(s"catchAll in startTask - ${e.getMessage}") *>
-              repo.setState(TaskState(Wait)) *>
-              ZIO.fail(new Exception(e.getMessage))
-          }
+          .tapError(er => ZIO.logError(er.getMessage) *>
+            repo.setState(TaskState(Wait))
+          )
           .onInterrupt {
             ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing")
           }
@@ -121,7 +119,6 @@ object WServer {
     _ <- repo.setState(TaskState(Wait))
     _ <- repo.clearTask
     _ <- sess.taskFinished
-    //_ <- sess.closeConnection
   } yield ()
 
   private def requestToEntity[A](r: Request)(implicit decoder: JsonDecoder[A]): ZIO[Any, Nothing, Either[String, A]] = for {
