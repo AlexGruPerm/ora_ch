@@ -41,4 +41,14 @@ case class Table(schema: String,
       case None => " "
     }
 
+  def finishStatus(): String =
+    sync_by_column_max match {
+      case Some(_) => "finished_append"
+      case None =>
+        update_fields match {
+        case Some(_) => "finished_update"
+        case None => "finished"
+      }
+    }
+
 }

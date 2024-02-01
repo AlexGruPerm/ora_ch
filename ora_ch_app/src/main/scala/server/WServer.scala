@@ -49,7 +49,7 @@ object WServer {
               batch_size,
               maxValAndCnt)
             .flatMap {
-              rc => sess.setTableCopied(table, rc)
+              rc => sess.setTableCopied(table, rc, table.finishStatus())
             }
       }
 
@@ -66,7 +66,7 @@ object WServer {
               pkColList
               )
             .flatMap {
-              rc => sess.setTableCopied(table, rc, "finished_for_update") *>
+              rc => sess.setTableCopied(table, rc, table.finishStatus()) *>
                 sessCh.updateColumns(table,table.copy(name = s"upd_${table.name}"),pkColList)
             }
       }
@@ -175,12 +175,11 @@ object WServer {
                ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer,
                ZLayer.succeed(SessCalc)
              ).forkDaemon
-
-             sched = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
+             schedule = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
              taskId <- repo.getTaskId
                .filterOrFail(_ != 0)(0.toString)
-               .retryOrElse(sched, (_: String, _: (Long, Long)) =>
-                 ZIO.fail(new Exception("Elapsed wait time 10 seconds of getting taskId")))
+               .retryOrElse(schedule, (_: String, _: (Long, Long)) =>
+                 ZIO.fail(new Exception(s"Elapsed wait time $waitSeconds seconds of getting taskId")))
         } yield Response.json(s"""{"taskid": "$taskId"}""").status(Status.Ok)
     }
   } yield response

@@ -397,7 +397,7 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
         .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.unit //todo: change df.toString use Cause !
   } yield ()
 
-  def setTableCopied(table: Table, rowCount: Long, status: String = "finished"): ZIO[Any, Throwable, Unit] = for {
+  def setTableCopied(table: Table, rowCount: Long, status: String): ZIO[Any, Throwable, Unit] = for {
     taskId <- getTaskIdFromSess
     _ <-
       ZIO.attemptBlocking {
