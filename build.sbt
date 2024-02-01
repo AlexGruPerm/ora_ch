@@ -1,7 +1,7 @@
 name := "ora_ch_app"
 
 ThisBuild / organization := "yakushev"
-ThisBuild / version      := "0.0.10"
+ThisBuild / version      := "0.0.11"
 ThisBuild / scalaVersion := "2.13.10" //todo: try scala 3.4
 //https://gist.github.com/carlosedp/c65b80ac1c0ddecd266f49248916a3df
 // for in Scala 3.4 where tuples can be directly unpacked in the for comprehension.

@@ -22,6 +22,7 @@ import table.{PrimaryKey, Table}
 import zio.json.JsonDecoder.fromCodec
 
 import java.io.IOException
+import java.sql.SQLException
 import scala.collection.immutable.List
 
 object WServer {
@@ -99,6 +100,9 @@ object WServer {
     task <- repo.ref.get
     setSchemas = task.tables.map(_.schema).toSet diff Set("system","default","information_schema")
     _ <- sess.saveTableList(task.tables)
+      .tapSomeError{case er: SQLException =>
+        ZIO.logError(s"saveTableList ${er.getMessage}") *> repo.setState(TaskState(Wait))
+      }
     _ <- sessCh.createDatabases(setSchemas)
     _ <- sess.setTaskState("executing")
     fetch_size = task.oraServer.map(_.fetch_size).getOrElse(1000)

@@ -231,33 +231,30 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
         table.keyType match {
           case ExtPrimaryKey =>
             s"""select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
-                table.where_filter match {
-                  case Some(where) => table.sync_by_column_max match
-                   {case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                    case None =>  s" where $where"
-                   }
-                  case None => " "
-                }
+              (table.where_filter,table.sync_by_column_max) match {
+                case (Some(where),Some(syncCol)) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                case (Some(where),_) => s""" where $where """
+                case (_,Some(syncCol)) => s""" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                case _ => " "
+              }
             }""".stripMargin
           case PrimaryKey | UniqueKey =>
             s"""select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
-              table.where_filter match {
-                case Some(where) => table.sync_by_column_max match {
-                  case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                  case None => s" where $where"
-                }
-                case None => " "
+              (table.where_filter, table.sync_by_column_max) match {
+                case (Some(where), Some(syncCol)) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                case (Some(where), _) => s""" where $where """
+                case (_, Some(syncCol)) => s""" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                case _ => " "
               }
             }""".stripMargin
           case RnKey =>
             s"""select row_number() over(order by null) as rn,t.* from (
                |select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
-              table.where_filter match {
-                case Some(where) => table.sync_by_column_max match {
-                  case Some(syncCol) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                  case None => s" where $where"
-                }
-                case None => " "
+              (table.where_filter, table.sync_by_column_max) match {
+                case (Some(where), Some(syncCol)) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                case (Some(where), _) => s""" where $where """
+                case (_, Some(syncCol)) => s""" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
+                case _ => " "
               }
             }) t """.stripMargin
         }
