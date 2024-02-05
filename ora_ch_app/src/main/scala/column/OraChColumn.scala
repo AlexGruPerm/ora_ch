@@ -47,7 +47,7 @@ object OraChColumn {
           case 0 => "UInt64"
           case _ => "Decimal128(6)" //"Decimal64(6)"
         }
-        case "VARCHAR2" => s"FixedString($precision)"
+        case "VARCHAR2" => "String"//s"FixedString($precision)"
         case "DATE" => "DateTime"
         case "CLOB" => "String"
         case _ => "UNDEFINED_COL_TYPE"

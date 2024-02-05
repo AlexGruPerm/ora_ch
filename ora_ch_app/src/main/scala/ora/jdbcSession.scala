@@ -68,6 +68,22 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
     }.tapError(er => ZIO.logError(er.getMessage))
   } yield ()
 
+  def saveCalcError(id: Int, errorMsg: String): ZIO[Any, Throwable, Unit] = for {
+    _ <- ZIO.attemptBlocking {
+      println(s"saveCalcError - id = $id")
+      val query: String =
+        s""" update ora_to_ch_views_query_log l
+           |   set l.end_calc  = sysdate,
+           |       l.error_msg = '$errorMsg',
+           |       l.state     = 'error'
+           | where l.id = $id
+           | """.stripMargin
+      val rs: ResultSet = sess.createStatement.executeQuery(query)
+      sess.commit()
+      rs.close()
+    }.tapError(er => ZIO.logError(er.getMessage))
+  } yield ()
+
   def saveBeginCopying(id: Int): ZIO[Any, Throwable, Unit] = for {
     _ <- ZIO.attemptBlocking {
       val query: String =

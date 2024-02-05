@@ -76,6 +76,18 @@ object CalcLogic {
     _ <- ora.saveEndCopying(calcId)
   } yield ()
 
+  private def saveCalcError(errorMsg: String,
+                            calcId: Int): ZIO[ImplCalcRepo with jdbcSession, Throwable, Unit] =
+    for {
+      _ <- ZIO.logInfo(s"> saveCalcError calcId = $calcId")
+      repo <- ZIO.service[ImplCalcRepo]
+      oraSession <- ZIO.service[jdbcSession]
+      ora <- oraSession.sessCalc(debugMsg = "copyDataChOra")
+      _ <- ora.saveCalcError(calcId, errorMsg)
+      _ <- repo.setState(CalcState(Wait))
+      _ <- repo.clearCalc
+    } yield ()
+
   /**
    * 1. get meta data about this calculation from oracle database.
    * 2.
@@ -100,14 +112,15 @@ object CalcLogic {
     stateBefore <- repo.getState
     _ <- repo.setState(CalcState(Calculation))
     stateAfter <- repo.getState
-    calcId <- repo.getCalcId
-    _ <- ZIO.logDebug(s"[startCalc] calcId=[$calcId] State: ${stateBefore.state} -> ${stateAfter.state} ")
     id <- beginQueryLog(calc.id_vq)
+    _ <- ZIO.logDebug(s"[startCalc] calcId=[$id] State: ${stateBefore.state} -> ${stateAfter.state} ")
     _ <- repo.updateCalcId(id)
-    _ <- meta.viewName match {
+    calcEffect = meta.viewName match {
       case Some(_) => calcView(meta, reqCalc)
       case None => calcQuery(meta, reqCalc)
     }
+    _ <- calcEffect.tapError(er => ZIO.logError(s" startCalculation - calcEffect ${er.getMessage}") *>
+      saveCalcError(er.getMessage,id))
     _ <- saveEndCalculation()
   } yield ()
 
