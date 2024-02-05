@@ -25,7 +25,10 @@ case class Table(schema: String,
   println(s"Table constr: $pk_columns - $only_columns - $notnull_columns")
 
   def syncArity(): Int =
-    sync_by_columns.getOrElse("").split(",").length
+    sync_by_columns match {
+      case Some(syncFields) => syncFields.split(",").length
+      case None => 0
+    }
 
   def fullTableName(): String =
     s"$schema.$name"

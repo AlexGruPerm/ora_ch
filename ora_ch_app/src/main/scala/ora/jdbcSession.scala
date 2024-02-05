@@ -368,6 +368,31 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
       }.tapError(er => ZIO.logError(er.getMessage))
   } yield ()
 
+  def setTaskError(error: String,table: Table): ZIO[Any, Throwable, Unit] = for {
+    taskId <- getTaskIdFromSess
+    _ <-
+      ZIO.attemptBlocking {
+        val rsTask: ResultSet = sess.createStatement.executeQuery(
+          s"update ora_to_ch_tasks set state='error',end_datetime=sysdate, error_msg='$error' where id=$taskId "
+        )
+        sess.commit()
+        rsTask.close()
+
+        val rsTable: ResultSet = sess.createStatement.executeQuery(
+          s"""update ora_to_ch_tasks_tables t
+              |set state = 'error',
+              |    end_datetime = sysdate
+              | where t.id_task     = $taskId and
+              |       t.schema_name = '${table.schema}' and
+              |       t.table_name  = '${table.name}'
+          """.stripMargin
+        )
+        sess.commit()
+        rsTable.close()
+
+      }.tapError(er => ZIO.logError(er.getMessage))
+  } yield ()
+
   def setTableBeginCopy(table: Table): ZIO[Any, Throwable, Unit] = for {
     taskId <- getTaskIdFromSess
     _ <-

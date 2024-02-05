@@ -39,13 +39,28 @@ object WServer {
     _ <- ora.updateCountCopiedRows(srcTable, copiedRows)
   } yield ()
 
-  private def copyTableEffect(sess: oraSessTask, sessCh: chSess,table: Table, fetch_size: Int, batch_size: Int):
+  private def saveError(sess: oraSessTask,
+                        errorMsg: String,
+                        updateFiber: Fiber.Runtime[Nothing, Long],
+                        table: Table):
+  ZIO[ImplTaskRepo, Throwable, Unit] =
+    for {
+     _ <- sess.setTaskError(errorMsg,table)
+     _ <- updateFiber.interrupt
+     repo <- ZIO.service[ImplTaskRepo]
+     _ <- repo.setState(TaskState(Wait))
+     _ <- repo.clearTask
+  } yield ()
+
+  private def copyTableEffect(sess: oraSessTask, sessCh: chSess, table: Table, fetch_size: Int, batch_size: Int):
   ZIO[ImplTaskRepo, Throwable, Unit] = for {
     _ <- sess.setTableBeginCopy(table)
     maxValAndCnt <- sessCh.getMaxColForSync(table)
     _ <- ZIO.logDebug(s" maxValAndCnt = $maxValAndCnt")
     //todo: we don't check fields types! Must be Int
-    appendKeys <- table.syncArity() match {
+    arity = table.syncArity()
+    _ <- ZIO.logDebug(s"copyTableEffect arity = $arity")
+    appendKeys <- arity match {
       case 1 => sessCh.whereAppendInt1(table)
       case 2 => sessCh.whereAppendInt2(table)
       case 3 => sessCh.whereAppendInt3(table)
@@ -53,7 +68,7 @@ object WServer {
     }
     _ <- ZIO.logInfo(s"appendKeys = $appendKeys")
     //_ <- ZIO.fail(new Exception("DEBUG STOP FLOW.............."))
-    _ <- updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt)
+    fiber <- updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt)
       .delay(2.second)
       .repeat(Schedule.spaced(5.second))
       .fork
@@ -63,6 +78,8 @@ object WServer {
                                        batch_size,
                                        maxValAndCnt
                                        )
+      .tapError(er => ZIO.logError(er.getMessage) *> saveError(sess,er.getMessage,fiber,table)
+      )
     _ <- sess.setTableCopied(table, rc, table.finishStatus())
   } yield ()
 

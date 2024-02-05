@@ -129,36 +129,16 @@ case class chSess(sess : Connection, taskId: Int){
     res <- getSyncWhereFilterRsTuples(table)
   } yield
     Some(res.map(_.asInstanceOf[Int]))
-    /*    List(
-      20150710,
-      20240203,
-      20240204
-    )*/
-
 
   def whereAppendInt2(table: Table): ZIO[Any, Throwable, Option[List[(Int,Int)]]] = for {
     _ <- ZIO.logInfo(s"whereAppendInt2 - ${table.name}")
     res <- getSyncWhereFilterRsTuples(table)
   } yield Some(res.map(_.asInstanceOf[(Int,Int)]))
-/*    Some(
-    List(
-      (20240205,20150101),
-      (20240205,20160101),
-      (20240203,20210101)
-    )
-  )*/
 
   def whereAppendInt3(table: Table): ZIO[Any, Throwable, Option[List[(Int,Int,Int)]]] = for {
     _ <- ZIO.logInfo(s"whereAppendInt3 - ${table.name}")
     res <- getSyncWhereFilterRsTuples(table)
   } yield  Some(res.map(_.asInstanceOf[(Int,Int,Int)]))
-/*    Some(
-    List(
-      (20240205, 20150101, 1),
-      (20240205, 20160101, 1),
-      (20240203, 20210101, 1)
-    )
-  )*/
 
   /**
    * Return the list of Primary key columns for clickhouse table.
