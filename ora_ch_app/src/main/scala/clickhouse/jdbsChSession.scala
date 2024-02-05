@@ -65,10 +65,22 @@ case class chSess(sess : Connection, taskId: Int){
 
   def getMaxValueByColCh(table: Table): ZIO[Any,Throwable,MaxValAndCnt] = for {
     maxVal <- ZIO.attemptBlocking {
+      /** We have 2 append mode:
+       * 1) sync_by_column_max - single column    In this case we need to know current maxVal.
+       * 2) sync_by_columns - by multiple fields. In this case don't need maxVal
+      */
       val q =
-        s""" select max(${table.sync_by_column_max.getOrElse("xxx")}) as maxVal,sum(1) as cnt
+        s""" select
+           |        ${
+                      table.sync_by_column_max match {
+                        case Some(syncSingleColumn) => s"max($syncSingleColumn)"
+                        case None => " 0 "
+                      }
+                     }
+           |        as maxVal,sum(1) as cnt
            |   from ${table.schema.toLowerCase}.${table.name.toLowerCase} """
           .stripMargin
+
       val rs = sess.createStatement.executeQuery(q)
       rs.next()
       val mvc = MaxValAndCnt(rs.getLong(1),rs.getLong(2))
@@ -77,12 +89,76 @@ case class chSess(sess : Connection, taskId: Int){
   } yield maxVal
 
   def getMaxColForSync(table: Table): ZIO[Any,Throwable,Option[MaxValAndCnt]] = for {
-    _ <- ZIO.logDebug(s"getMaxColForSync sync_by_column_max = ${table.sync_by_column_max}")
-    tblExistsCh <- isTableExistsCh(table).when(table.sync_by_column_max.nonEmpty)
-    _ <- ZIO.logDebug(s"tblExistsCh = $tblExistsCh")
+    tblExistsCh <- isTableExistsCh(table).when(table.sync_by_column_max.nonEmpty || table.sync_by_columns.nonEmpty)
     maxColCh <- getMaxValueByColCh(table).when(tblExistsCh.getOrElse(0)==1)
-    _ <- ZIO.logDebug(s"maxColCh = $maxColCh")
   } yield maxColCh
+
+  private def getSyncWhereFilterRsTuples(table: Table): ZIO[Any, Throwable, List[Any]] = for {
+    res <- ZIO.attemptBlocking {
+      val q =
+        s""" select distinct ${table.sync_by_columns.getOrElse(" CH_EMPTY_SYNC_COLUMNS ")}
+           |   from ${table.schema.toLowerCase}.${table.name.toLowerCase} """
+          .stripMargin
+      val rs = sess.createStatement.executeQuery(q)
+
+      val filterTuples: List[Any] = {
+                table.syncArity() match {
+                  case 1 => Iterator.continually(rs).takeWhile(_.next()).map { rs =>
+                              rs.getLong(1)
+                            }.toList
+                  case 2 => Iterator.continually(rs).takeWhile(_.next()).map { rs =>
+                             (rs.getLong(1),
+                               rs.getLong(2))
+                            }.toList
+                  case 3 => Iterator.continually(rs).takeWhile(_.next()).map { rs =>
+                              (rs.getLong(1),
+                                rs.getLong(2),
+                                rs.getLong(3)
+                              )
+                            }.toList
+                  case _ => List.empty[Any]
+                }
+      }
+
+      filterTuples
+    }.tapError(er => ZIO.logError(er.getMessage))
+  } yield res
+
+  def whereAppendInt1(table: Table): ZIO[Any, Throwable, Option[List[Int]]] = for {
+    _ <- ZIO.logInfo(s"whereAppendInt1 - ${table.name}")
+    res <- getSyncWhereFilterRsTuples(table)
+  } yield
+    Some(res.map(_.asInstanceOf[Int]))
+    /*    List(
+      20150710,
+      20240203,
+      20240204
+    )*/
+
+
+  def whereAppendInt2(table: Table): ZIO[Any, Throwable, Option[List[(Int,Int)]]] = for {
+    _ <- ZIO.logInfo(s"whereAppendInt2 - ${table.name}")
+    res <- getSyncWhereFilterRsTuples(table)
+  } yield Some(res.map(_.asInstanceOf[(Int,Int)]))
+/*    Some(
+    List(
+      (20240205,20150101),
+      (20240205,20160101),
+      (20240203,20210101)
+    )
+  )*/
+
+  def whereAppendInt3(table: Table): ZIO[Any, Throwable, Option[List[(Int,Int,Int)]]] = for {
+    _ <- ZIO.logInfo(s"whereAppendInt3 - ${table.name}")
+    res <- getSyncWhereFilterRsTuples(table)
+  } yield  Some(res.map(_.asInstanceOf[(Int,Int,Int)]))
+/*    Some(
+    List(
+      (20240205, 20150101, 1),
+      (20240205, 20160101, 1),
+      (20240203, 20210101, 1)
+    )
+  )*/
 
   /**
    * Return the list of Primary key columns for clickhouse table.
@@ -173,7 +249,8 @@ case class chSess(sess : Connection, taskId: Int){
   def recreateTableCopyData(table: Table,
                             rs: ZIO[Any, Throwable, ResultSet],
                             batch_size: Int,
-                            maxValCnt: Option[MaxValAndCnt]): ZIO[Any, Throwable, Long] =
+                            maxValCnt: Option[MaxValAndCnt]
+                           ): ZIO[Any, Throwable, Long] =
     for {
     _ <- ZIO.logInfo(s"recreateTableCopyData table : ${table.fullTableName()}")
     oraRs <- rs
@@ -232,7 +309,7 @@ case class chSess(sess : Connection, taskId: Int){
       sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
       sess.createStatement.executeQuery(createScript)
     }.tapError(er => ZIO.logError(er.getMessage))
-      .when(table.recreate==1 || (maxValCnt.isEmpty && maxValCnt.map(_.CntRows).getOrElse(0L)==0L))
+      .when(table.recreate==1)
 
     rows <- ZIO.attemptBlockingInterrupt {
       //------------------------------------
@@ -244,30 +321,10 @@ case class chSess(sess : Connection, taskId: Int){
               (c.typeName, c.scale) match {
                 // Long - because getInt is that 4294967298 is outside the range of Java's int
                 case ("NUMBER", 0) => ps.setLong(i, rs.getLong(c.name))
-/*                  {
-                    println(s"NUMBER_0 ${c.name}")
-                    val intVal: Long = rs.getLong(c.name)
-                    println(s"intVal = $intVal")
-                    ps.setLong(i, intVal)
-                    //ps.SetLong ???
-                  }*/
                 case ("NUMBER", _) => ps.setDouble(i, rs.getDouble(c.name))
-/*                  {
-                    println(s"NUMBER__ ${c.name}")
-                    val dblVal: Double = rs.getDouble(c.name)
-                    println(s"dblVal = $dblVal")
-                    ps.setDouble(i, dblVal)
-                  }*/
-                /*
-                  {
-                  val d: java.math.BigDecimal = rs.getBigDecimal(c.name)
-                  println(s"BigDecimal value = $d")
-                  ps.setBigDecimal(i,d)
-                }
-                */
                 case ("CLOB", _) => ps.setString(i, rs.getString(c.name))
                 case ("VARCHAR2", _) => ps.setString(i, rs.getString(c.name))
-                case ("DATE", _) => {
+                case ("DATE", _) =>
                   val tmp = rs.getString(c.name)
                   val isNull: Boolean = rs.wasNull()
                   if (!isNull) {
@@ -282,7 +339,6 @@ case class chSess(sess : Connection, taskId: Int){
                     }
                   } else
                       ps.setNull(i,Types.DATE)
-                }
               }
               i + 1
           }
@@ -299,9 +355,7 @@ case class chSess(sess : Connection, taskId: Int){
       val rowCount = rsRowCount.getLong(1)
       rsRowCount.close()
       rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
-    }.ensuring(
-        ZIO.logDebug("End of the blocking operation in recreateTableCopyData - batch inserts.")
-    ).tapError(er => ZIO.logError(er.getMessage))
+    }.tapError(er => ZIO.logError(er.getMessage))
     _ <- ZIO.logInfo(s"Copied $rows rows to ${table.schema}.${table.name}")
   } yield rows
 

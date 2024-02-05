@@ -1,6 +1,6 @@
 package table
 
-import common.Types.OptStrint
+import common.Types.OptString
 
 /**
  * Table or view
@@ -10,18 +10,22 @@ case class Table(schema: String,
                  name: String,
                  keyType: KeyType,
                  keyColumns: String,
-                 plsql_context_date:  OptStrint,
-                 pk_columns:          OptStrint,
-                 only_columns:        OptStrint,
-                 ins_select_order_by: OptStrint,
-                 partition_by:        OptStrint,
-                 notnull_columns:     OptStrint,
-                 where_filter:        OptStrint,
-                 sync_by_column_max:  OptStrint,
-                 update_fields:       OptStrint
+                 plsql_context_date:  OptString,
+                 pk_columns:          OptString,
+                 only_columns:        OptString,
+                 ins_select_order_by: OptString,
+                 partition_by:        OptString,
+                 notnull_columns:     OptString,
+                 where_filter:        OptString,
+                 sync_by_column_max:  OptString,
+                 update_fields:       OptString,
+                 sync_by_columns:     OptString
                 ){
 
   println(s"Table constr: $pk_columns - $only_columns - $notnull_columns")
+
+  def syncArity(): Int =
+    sync_by_columns.getOrElse("").split(",").length
 
   def fullTableName(): String =
     s"$schema.$name"

@@ -39,27 +39,39 @@ object WServer {
     _ <- ora.updateCountCopiedRows(srcTable, copiedRows)
   } yield ()
 
-  private def copyTableEffect(sess: oraSessTask,sessCh: chSess,table: Table, fetch_size: Int, batch_size: Int):
-  ZIO[ImplTaskRepo, Throwable, Unit] =
-    sess.setTableBeginCopy(table) *>
-      sessCh.getMaxColForSync(table).flatMap { maxValAndCnt =>
-        updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt).repeat(Schedule.spaced(5.second)).fork *>
-          sessCh.recreateTableCopyData(
-              table,
-              sess.getDataResultSet(table, fetch_size, maxValAndCnt),
-              batch_size,
-              maxValAndCnt)
-            .flatMap {
-              rc => sess.setTableCopied(table, rc, table.finishStatus())
-            }
-      }
+  private def copyTableEffect(sess: oraSessTask, sessCh: chSess,table: Table, fetch_size: Int, batch_size: Int):
+  ZIO[ImplTaskRepo, Throwable, Unit] = for {
+    _ <- sess.setTableBeginCopy(table)
+    maxValAndCnt <- sessCh.getMaxColForSync(table)
+    _ <- ZIO.logDebug(s" maxValAndCnt = $maxValAndCnt")
+    //todo: we don't check fields types! Must be Int
+    appendKeys <- table.syncArity() match {
+      case 1 => sessCh.whereAppendInt1(table)
+      case 2 => sessCh.whereAppendInt2(table)
+      case 3 => sessCh.whereAppendInt3(table)
+      case _ => ZIO.succeed(None)
+    }
+    _ <- ZIO.logInfo(s"appendKeys = $appendKeys")
+    //_ <- ZIO.fail(new Exception("DEBUG STOP FLOW.............."))
+    _ <- updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt)
+      .delay(2.second)
+      .repeat(Schedule.spaced(5.second))
+      .fork
+    rs = sess.getDataResultSet(table, fetch_size, maxValAndCnt, appendKeys)
+    rc <- sessCh.recreateTableCopyData(table,
+                                       rs,
+                                       batch_size,
+                                       maxValAndCnt
+                                       )
+    _ <- sess.setTableCopied(table, rc, table.finishStatus())
+  } yield ()
 
   private def updateTableColumns(sess: oraSessTask, sessCh: chSess, table: Table, fetch_size: Int, batch_size: Int):
   ZIO[ImplTaskRepo, Throwable, Unit] =
     sess.setTableBeginCopy(table) *>
-      //todo: Engine = Join(ANY, LEFT, date_start,date_end,id);
       sessCh.getPkColumns(table).flatMap { pkColList =>
-        updatedCopiedRowsCountFUpd(table, table.copy(name = s"upd_${table.name}"), sess, sessCh).repeat(Schedule.spaced(5.second)).fork *>
+        updatedCopiedRowsCountFUpd(table, table.copy(name = s"upd_${table.name}"), sess, sessCh)
+          .repeat(Schedule.spaced(5.second)).fork *>
           sessCh.recreateTableCopyDataForUpdate(
               table.copy(name = s"upd_${table.name}"),
               sess.getDataResultSetForUpdate(table,fetch_size,pkColList),
@@ -71,7 +83,6 @@ object WServer {
                 sessCh.updateColumns(table,table.copy(name = s"upd_${table.name}"),pkColList)
             }
       }
-
 
   private def startTask(newtask: ReqNewTask): ZIO[ImplTaskRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
     _ <- ZIO.logDebug(s"This is a debug message 2")
@@ -162,7 +173,6 @@ object WServer {
   }
 
   private def task(req: Request, waitSeconds: Int): ZIO[ImplTaskRepo with SessTypeEnum, Throwable, Response] = for {
-    _ <- ZIO.logDebug(s"This is a debug message 1")
     u <- requestToEntity[ReqNewTask](req)
     response <- u match {
       case Left(errorString) => ZioResponseMsgBadRequest(errorString)

@@ -2,7 +2,7 @@ package common
 
 object Types {
 
-  type OptStrint = Option[String]
+  type OptString = Option[String]
 
   case class MaxValAndCnt(MaxValue: Long, CntRows: Long)
 

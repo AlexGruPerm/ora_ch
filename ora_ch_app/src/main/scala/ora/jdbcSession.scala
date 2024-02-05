@@ -12,7 +12,7 @@ import java.sql.{Clob, Connection, DriverManager, PreparedStatement, ResultSet, 
 import java.util.Properties
 import common.Types._
 import OraChColumn._
-import common.{SessCalc, SessTask, SessTypeEnum}
+import common.{ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum}
 import connrepo.OraConnRepoImpl
 
 sealed trait oraSess {
@@ -223,67 +223,80 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
 
 case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
 
-  def getDataResultSet(table: Table, fetch_size: Int, maxColCh: Option[MaxValAndCnt]): ZIO[Any, Throwable, ResultSet] = for {
-    _ <- ZIO.unit
-    rs <- ZIO.attemptBlocking {
-      println(s"getDataResultSet table.only_columns = ${table.only_columns}")
-      val dataQuery = {
-        table.keyType match {
-          case ExtPrimaryKey =>
-            s"""select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
-              (table.where_filter,table.sync_by_column_max) match {
-                case (Some(where),Some(syncCol)) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                case (Some(where),_) => s""" where $where """
-                case (_,Some(syncCol)) => s""" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                case _ => " "
-              }
-            }""".stripMargin
-          case PrimaryKey | UniqueKey =>
-            s"""select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
-              (table.where_filter, table.sync_by_column_max) match {
-                case (Some(where), Some(syncCol)) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                case (Some(where), _) => s""" where $where """
-                case (_, Some(syncCol)) => s""" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                case _ => " "
-              }
-            }""".stripMargin
-          case RnKey =>
-            s"""select row_number() over(order by null) as rn,t.* from (
-               |select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
-              (table.where_filter, table.sync_by_column_max) match {
-                case (Some(where), Some(syncCol)) => s""" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                case (Some(where), _) => s""" where $where """
-                case (_, Some(syncCol)) => s""" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} """
-                case _ => " "
-              }
-            }) t """.stripMargin
-        }
-      }
-      println(s"dataQuery = $dataQuery")
-      //********************* CONTEXT *************************
+  private def setContext(table: Table): Unit =
+    if (table.plsql_context_date.nonEmpty) {
       val ctxDate: String = table.plsql_context_date.getOrElse(" ")
-      if (table.plsql_context_date.nonEmpty){
       val contextSql =
         s"""
-          | begin
-          |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
-          |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
-          |end;
-          |""".stripMargin
-      val prec = sess.prepareCall(contextSql)
-      prec.execute()
-      } else ()
-      //*******************************************************
-      val dateQueryWithOrd: String = table.ins_select_order_by match {
-        case Some(order_by) => s"$dataQuery order by $order_by"
-        case None => dataQuery
-      }
+           | begin
+           |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+           |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+           |end;
+           |""".stripMargin
+      val prep = sess.prepareCall(contextSql)
+      prep.execute()
+    } else ()
+
+  private def getAppendByFieldsPart(table: Table,
+                                    appendKeys: Option[List[Any]] = Option.empty[List[Any]]): String = {
+    val appendKeysList: List[Any] = appendKeys.getOrElse(List.empty[Any])
+    val filterStr = s" ( ${table.sync_by_columns.getOrElse(" EMPTY_SYNC_BY_COLUMNS ")} ) "
+    val filterTuples: String =
+    if (table.syncArity() == 1){
+      s"(${appendKeysList.mkString(",")})"
+    } else if (table.syncArity() == 2){
+      s"""(${appendKeysList.map(lst =>
+        s"(${lst.asInstanceOf[(Int,Int)].productIterator.toList.mkString(",")})").mkString(",")})"""
+    } else if (table.syncArity() == 3){
+      s"""(${appendKeysList.map(lst =>
+        s"(${lst.asInstanceOf[(Int,Int,Int)].productIterator.toList.mkString(",")})").mkString(",")})"""
+    } else
+       " "
+    s" $filterStr not in $filterTuples "
+  }
+
+  def getDataResultSet(table: Table,
+                       fetch_size: Int,
+                       maxColCh: Option[MaxValAndCnt],
+                       appendKeys: Option[List[Any]] = Option.empty[List[Any]]):
+  ZIO[Any, Throwable, ResultSet] = for {
+    _ <- ZIO.logDebug(
+      s"recreateTableCopyData arity = ${table.syncArity()} appendKeys.nonEmpty = ${appendKeys.nonEmpty}")
+    rsWithQuery <- ZIO.attemptBlocking {
+      val whereByFields: String = getAppendByFieldsPart(table,appendKeys)
+      val dataQuery =
+        s""" ${
+               table.keyType match {
+                 case RnKey => " select row_number() over(order by null) as rn,t.* from ( "
+                 case _     => " "
+               }
+              }
+            select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
+          (table.where_filter, table.sync_by_column_max, table.sync_by_columns) match {
+            case (Some(where), Some(syncCol), None) => s" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
+            case (Some(where), None, Some(_))       => s" where $where and $whereByFields "
+            case (_, None, Some(_))                 => s" where $whereByFields "
+            case (_, Some(syncCol), None)           => s" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
+            case (Some(where), _, _)                => s" where $where "
+            case _ => " "
+          }
+        } ${
+          table.keyType match {
+            case RnKey => " ) t "
+            case _ => " "
+          }
+        }
+          ${table.ins_select_order_by.map(order => s" order by $order ").getOrElse(" ")}
+        """.stripMargin
+
+      setContext(table)
       val dataRs = sess.createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY,ResultSet.CONCUR_READ_ONLY)
-        .executeQuery(dateQueryWithOrd)
+        .executeQuery(dataQuery)
       dataRs.setFetchSize(fetch_size)
-      dataRs
-    }.tapError(er => ZIO.logError(er.getMessage))
-  } yield rs
+      ResultSetWithQuery(dataRs,dataQuery)
+    }.tapBoth(er => ZIO.logError(er.getMessage),
+      rsq => ZIO.logDebug(s"getDataResultSet select = ${rsq.query} "))
+  } yield rsWithQuery.rs
 
   /**
    * Get oracle dataset for update clickhouse table.
@@ -516,7 +529,8 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
                 ot.notnull_columns,
                 ot.where_filter,
                 ot.sync_by_column_max,
-                ot.update_fields)
+                ot.update_fields,
+                ot.sync_by_columns)
           }
         }
       }

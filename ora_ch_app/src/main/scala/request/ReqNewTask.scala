@@ -1,21 +1,38 @@
 package request
 
-import common.Types.OptStrint
+import common.Types.OptString
 import conf.{ClickhouseServer, OraServer}
 import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
 case class OneTable(recreate: Int = 1,
                     name: String,
-                    plsql_context_date:  OptStrint = Option.empty[String],
-                    pk_columns:          OptStrint = Option.empty[String],
-                    only_columns:        OptStrint = Option.empty[String],
-                    ins_select_order_by: OptStrint = Option.empty[String],
-                    partition_by:        OptStrint = Option.empty[String],
-                    notnull_columns:     OptStrint = Option.empty[String],
-                    where_filter:        OptStrint = Option.empty[String],
-                    sync_by_column_max:  OptStrint = Option.empty[String],
-                    update_fields:       OptStrint = Option.empty[String]
-                   )
+                    plsql_context_date:  OptString = Option.empty[String],
+                    pk_columns:          OptString = Option.empty[String],
+                    only_columns:        OptString = Option.empty[String],
+                    ins_select_order_by: OptString = Option.empty[String],
+                    partition_by:        OptString = Option.empty[String],
+                    notnull_columns:     OptString = Option.empty[String],
+                    where_filter:        OptString = Option.empty[String],
+                    sync_by_column_max:  OptString = Option.empty[String],
+                    update_fields:       OptString = Option.empty[String],
+                    sync_by_columns:     OptString = Option.empty[String]
+                   ){
+  if (recreate == 1 && sync_by_columns.nonEmpty)
+    throw new Exception("recreate = 1 incompatible with non empty sync_by_column_max.")
+
+  if (recreate == 1 && sync_by_columns.nonEmpty)
+    throw new Exception("recreate = 1 incompatible with non empty sync_by_columns.")
+
+  if (recreate == 1 && update_fields.nonEmpty)
+    throw new Exception("recreate = 1 incompatible with non empty update_fields.")
+
+  if (sync_by_columns.getOrElse("").split(",").length > 3)
+    throw new Exception("sync_by_columns supports only up to three fields with Int type.")
+
+  if (sync_by_columns.nonEmpty && sync_by_column_max.nonEmpty)
+    throw new Exception("not empty sync_by_column_max incompatible with non empty sync_by_columns.")
+
+}
 
 case class SrcTable(schema: String, tables: List[OneTable] = List.empty[OneTable])
 
