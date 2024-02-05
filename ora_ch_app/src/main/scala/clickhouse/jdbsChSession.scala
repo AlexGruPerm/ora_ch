@@ -389,7 +389,7 @@ case class chSess(sess : Connection, taskId: Int){
         s"""create table ${table.schema}.${table.name}
            |(
            | $colsScript
-           |) ENGINE = Join(ANY, LEFT, ${pkColList.mkString(",")}) SETTINGS join_use_nulls=1
+           |) ENGINE = Join(ANY, LEFT, ${pkColList.mkString(",")}) SETTINGS join_use_nulls = 1
            |""".stripMargin
       _ <- ZIO.logDebug(s"createScript = $createScript")
       insertQuery =
