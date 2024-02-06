@@ -508,9 +508,9 @@ case class chSess(sess : Connection, taskId: Int){
       val selectQuery: String = meta.params.toList.sortBy(_.ord).foldLeft(strQuery) {
         case (r, c) =>
           c.chType match {
-            case "Decimal(38,6)" => r.replace(c.name, mapCalcParams.getOrElse(c.name, "******"))
-            case "String" => r.replace(c.name, s"'${mapCalcParams.getOrElse(c.name, "******")}'")
-            case "UInt32" => r.replace(c.name, mapCalcParams.getOrElse(c.name, "******"))
+            case "Decimal(38,6)" => r.replace(c.name, mapCalcParams.getOrElse(c.name, "*****"))
+            case "String" => r.replace(c.name, s"'${mapCalcParams.getOrElse(c.name, "*****")}'")
+            case "UInt32" => r.replace(c.name, mapCalcParams.getOrElse(c.name, "*****"))
           }
       }
       val insQuery: String = s"insert into ${meta.chSchema}.${meta.chTable} $selectQuery"
