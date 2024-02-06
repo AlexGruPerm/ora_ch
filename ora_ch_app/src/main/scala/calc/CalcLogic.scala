@@ -26,10 +26,10 @@ object CalcLogic {
     vqMeta <- ora.getVqMeta(reqCalc.view_query_id)
   } yield vqMeta
 
-  private def truncTable(tableName: String): ZIO[jdbcChSession, Throwable, Unit] = for {
+  private def truncTable(meta: ViewQueryMeta): ZIO[jdbcChSession, Throwable, Unit] = for {
     chSession <- ZIO.service[jdbcChSession]
     ch <- chSession.sess(0) //todo: 0 - just for debug, there is no task when we calc.
-    _ <- ch.truncateTable(tableName)
+    _ <- ch.truncateTable(meta)
   } yield ()
 
   private def insertFromQuery(meta: ViewQueryMeta, reqCalc: ReqCalcSrc): ZIO[jdbcSession with jdbcChSession, Throwable, Unit] = for {
@@ -40,13 +40,13 @@ object CalcLogic {
 
   private def calcView(meta: ViewQueryMeta, reqCalc: ReqCalcSrc): ZIO[jdbcSession with jdbcChSession, Throwable, Unit] = for {
     _ <- ZIO.logInfo(s"calcView for vqId = ${reqCalc.view_query_id} clickhouse table = ${meta.chTable}")
-    _ <- truncTable(meta.chTable)
+    _ <- truncTable(meta)
     // _ <- insertFromView(meta, reqCalc)
   } yield ()
 
   private def calcQuery(meta: ViewQueryMeta, reqCalc: ReqCalcSrc): ZIO[jdbcSession with jdbcChSession, Throwable, Unit] = for {
     _ <- ZIO.logInfo(s"calcQuery for vqId = ${reqCalc.view_query_id} clickhouse table = ${meta.chTable}")
-    _ <- truncTable(meta.chTable)
+    _ <- truncTable(meta)
     _ <- insertFromQuery(meta, reqCalc)
   } yield ()
 
@@ -132,7 +132,7 @@ object CalcLogic {
     _ <- ZIO.logInfo(s"Begin copyDataChOra ${reqCalc.view_query_id} ${meta.chTable}")
     chSession <- ZIO.service[jdbcChSession]
     ch <- chSession.sess(0) //todo: 0 - just for debug, there is no task when we calc.
-    chTableRs <- ch.getChTableResultSet(meta.chTable)
+    chTableRs <- ch.getChTableResultSet(meta)
     oraSession <- ZIO.service[jdbcSession]
     ora <- oraSession.sessCalc(debugMsg = "copyDataChOra")
     _ <- repo.setState(CalcState(Copying))

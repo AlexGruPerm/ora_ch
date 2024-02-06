@@ -482,17 +482,17 @@ case class chSess(sess : Connection, taskId: Int){
     }
   } yield ()
 
-  def truncateTable(tableName: String): ZIO[Any, Throwable, Unit] = for {
+  def truncateTable(meta: ViewQueryMeta): ZIO[Any, Throwable, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt{
       val rs: ResultSet = sess.createStatement.
-        executeQuery(s"truncate table msk_analytics_caches.$tableName")
+        executeQuery(s"truncate table ${meta.chSchema}.${meta.chTable}")
       rs.close()
     }.tapError(er => ZIO.logError(er.getMessage))
   } yield ()
 
-  def getChTableResultSet(tableName: String): ZIO[Any,Throwable,ResultSet] = for {
+  def getChTableResultSet(meta: ViewQueryMeta): ZIO[Any,Throwable,ResultSet] = for {
     rs <- ZIO.attemptBlockingInterrupt {
-      val selectQuery: String = s"select * from msk_analytics_caches.$tableName"
+      val selectQuery: String = s"select * from ${meta.chSchema}.${meta.chTable}"
       println(s"getChTableResultSet selectQuery = $selectQuery")
       sess.createStatement.executeQuery(selectQuery)
     }.tapBoth(
