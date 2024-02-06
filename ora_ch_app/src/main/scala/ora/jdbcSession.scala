@@ -98,6 +98,16 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
     }.tapError(er => ZIO.logError(er.getMessage))
   } yield ()
 
+  def truncateTable(oraSchema: String, oraTable: String) : ZIO[Any, Throwable, Unit] = for {
+    _ <- ZIO.attemptBlocking {
+      val query: String =
+        s" truncate table $oraSchema.$oraTable"
+      val rs: ResultSet = sess.createStatement.executeQuery(query)
+      sess.commit()
+      rs.close()
+    }.tapError(er => ZIO.logError(er.getMessage))
+  } yield ()
+
   def saveEndCopying(id: Int): ZIO[Any, Throwable, Unit] = for {
     _ <- ZIO.attemptBlocking {
       val query: String =
@@ -116,7 +126,7 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
     _ <- ZIO.unit
     vqMeta <- ZIO.attemptBlockingInterrupt {
       val queryVq =
-        s""" select vq.view_name,vq.ch_table,vq.ora_table,vq.query_text
+        s""" select vq.view_name,vq.ch_table,vq.ora_table,vq.query_text,vq.ch_schema,vq.ora_schema
            |  from ora_to_ch_views_query vq
            | where vq.id = $vqId """.stripMargin
       val rsVq: ResultSet = sess.createStatement.executeQuery(queryVq)
@@ -156,7 +166,9 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
         rsVq.getString("ch_table"),
         rsVq.getString("ora_table"),
         optQueryStr,
-        vqParams
+        vqParams,
+        rsVq.getString("ch_schema"),
+        rsVq.getString("ora_schema")
       )
       rsVq.close()
       rsParams.close()
@@ -197,14 +209,14 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
     }.tapError(er => ZIO.logError(er.getMessage))
   } yield cols
 
-  def insertRsDataInTable(rs: ResultSet, tableName: String): ZIO[Any, Throwable, Unit] = for {
+  def insertRsDataInTable(rs: ResultSet, tableName: String, oraSchema: String): ZIO[Any, Throwable, Unit] = for {
     cols <- getColumnsFromRs(rs).tapError(er => ZIO.logError(er.getMessage))
     _ <- ZIO.attemptBlockingInterrupt {
       val batch_size = 1000
       val fetch_size = 1000
       val nakedCols = cols.map(chCol => chCol.name).mkString(",")
       val bindQuests = cols.map(_ => "?").mkString(",")
-      val insQuery: String = s"insert into msk_analytics_caches.$tableName($nakedCols) values($bindQuests)"
+      val insQuery: String = s"insert into $oraSchema.$tableName($nakedCols) values($bindQuests)"
       //println(s" insQuery = $insQuery")
 
       val ps: PreparedStatement = sess.prepareStatement(insQuery)

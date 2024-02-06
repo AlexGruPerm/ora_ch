@@ -74,6 +74,8 @@ object CalcLogic {
     oraSession <- ZIO.service[jdbcSession]
     ora <- oraSession.sessCalc(debugMsg = "saveEndCopying")
     _ <- ora.saveEndCopying(calcId)
+    _ <- repo.setState(CalcState(Wait))
+    _ <- repo.clearCalc
   } yield ()
 
   private def saveCalcError(errorMsg: String,
@@ -136,7 +138,8 @@ object CalcLogic {
     _ <- repo.setState(CalcState(Copying))
     calcId <- repo.getCalcId
     _ <- ora.saveBeginCopying(calcId)
-    _ <- ora.insertRsDataInTable(chTableRs,meta.oraTable)
+    _ <- ora.truncateTable(meta.oraSchema,meta.oraTable)
+    _ <- ora.insertRsDataInTable(chTableRs,meta.oraTable,meta.oraSchema)
       .tapError(er => ZIO.logError(er.getMessage) *>
         repo.setState(CalcState(Wait))
       )

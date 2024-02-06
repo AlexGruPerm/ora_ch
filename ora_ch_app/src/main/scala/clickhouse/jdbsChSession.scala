@@ -513,7 +513,7 @@ case class chSess(sess : Connection, taskId: Int){
             case "UInt32" => r.replace(c.name, mapCalcParams.getOrElse(c.name, "******"))
           }
       }
-      val insQuery: String = s"insert into msk_analytics_caches.${meta.chTable} $selectQuery"
+      val insQuery: String = s"insert into ${meta.chSchema}.${meta.chTable} $selectQuery"
       val rs: ResultSet = sess.createStatement.executeQuery(insQuery)
       rs.close()
       insQuery
