@@ -154,7 +154,7 @@ object WServer {
     }
     res <- ZIO.collectAll(copyEffects)
     _ <- ZIO.foreachDiscard(res){item =>
-      ZIO.logInfo(s"item = $item")
+      ZIO.logDebug(s"item = $item")
     }
     _ <- repo.setState(TaskState(Wait))
     _ <- repo.clearTask
