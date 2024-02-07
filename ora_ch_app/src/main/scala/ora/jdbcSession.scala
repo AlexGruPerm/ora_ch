@@ -290,6 +290,7 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
   ZIO[Any, Throwable, ResultSet] = for {
     _ <- ZIO.logDebug(
       s"recreateTableCopyData arity = ${table.syncArity()} appendKeys.nonEmpty = ${appendKeys.nonEmpty}")
+    _ <- ZIO.logInfo(s"getDataResultSet maxColCh.CntRows = ${maxColCh.map(_.CntRows).getOrElse(0L)}")
     rsWithQuery <- ZIO.attemptBlocking {
       val whereByFields: String = getAppendByFieldsPart(table,appendKeys)
       val dataQuery =
@@ -300,7 +301,10 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
                }
               }
             select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
-          (table.where_filter, table.sync_by_column_max, table.sync_by_columns) match {
+          ( table.where_filter,
+            table.sync_by_column_max.getOrElse(table.sync_update_by_column_max),
+            table.sync_by_columns)
+          match {
             case (Some(where), Some(syncCol), None) => s" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
             case (Some(where), None, Some(_))       => s" where $where and $whereByFields "
             case (_, None, Some(_))                 => s" where $whereByFields "
@@ -438,9 +442,9 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
       }.tapError(er => ZIO.logError(er.getMessage))
   } yield ()
 
-  def updateCountCopiedRows(table: Table, rowCount: Long): ZIO[Any, Nothing, Unit] = for {
+  def updateCountCopiedRows(table: Table, rowCount: Long): ZIO[Any, Nothing, Long] = for {
     taskId <- getTaskIdFromSess orElse ZIO.succeed(0)
-    _ <-
+    rows <-
       ZIO.attemptBlocking {
         val query: String =
           s""" update ora_to_ch_tasks_tables t
@@ -456,9 +460,10 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         sess.commit()
         rs.close()
+          rowCount
         }.tapError(er => ZIO.logError(er.getMessage))
-        .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.unit //todo: change df.toString use Cause !
-  } yield ()
+        .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
+  } yield rows
 
   def setTableCopied(table: Table, rowCount: Long, status: String): ZIO[Any, Throwable, Unit] = for {
     taskId <- getTaskIdFromSess
@@ -583,7 +588,8 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
                 ot.where_filter,
                 ot.sync_by_column_max,
                 ot.update_fields,
-                ot.sync_by_columns)
+                ot.sync_by_columns,
+                ot.sync_update_by_column_max)
           }
         }
       }

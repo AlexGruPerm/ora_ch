@@ -28,16 +28,16 @@ import scala.collection.immutable.List
 object WServer {
 
   private def updatedCopiedRowsCount(table: Table, ora: oraSessTask, ch: chSess, maxValCnt: Option[MaxValAndCnt]):
-  ZIO[Any,Nothing,Unit] = for {
+  ZIO[Any,Nothing,Long] = for {
     copiedRows <- ch.getCountCopiedRows(table)
-    _ <- ora.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
-  } yield ()
+    rowCount <- ora.updateCountCopiedRows(table,copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L))
+  } yield rowCount
 
   private def updatedCopiedRowsCountFUpd(srcTable: Table, targetTable: Table, ora: oraSessTask, ch: chSess):
-  ZIO[Any, Nothing, Unit] = for {
+  ZIO[Any, Nothing, Long] = for {
     copiedRows <- ch.getCountCopiedRowsFUpd(targetTable)
-    _ <- ora.updateCountCopiedRows(srcTable, copiedRows)
-  } yield ()
+    rowCount <- ora.updateCountCopiedRows(srcTable, copiedRows)
+  } yield rowCount
 
   private def saveError(sess: oraSessTask,
                         errorMsg: String,
@@ -53,11 +53,10 @@ object WServer {
   } yield ()
 
   private def copyTableEffect(sess: oraSessTask, sessCh: chSess, table: Table, fetch_size: Int, batch_size: Int):
-  ZIO[ImplTaskRepo, Throwable, Unit] = for {
+  ZIO[ImplTaskRepo, Throwable, Long] = for {
     _ <- sess.setTableBeginCopy(table)
     maxValAndCnt <- sessCh.getMaxColForSync(table)
     _ <- ZIO.logDebug(s" maxValAndCnt = $maxValAndCnt")
-    //todo: we don't check fields types! Must be Int
     arity = table.syncArity()
     _ <- ZIO.logDebug(s"copyTableEffect arity = $arity")
     appendKeys <- arity match {
@@ -67,24 +66,24 @@ object WServer {
       case _ => ZIO.succeed(None)
     }
     _ <- ZIO.logInfo(s"appendKeys = $appendKeys")
-    //_ <- ZIO.fail(new Exception("DEBUG STOP FLOW.............."))
     fiber <- updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt)
       .delay(2.second)
       .repeat(Schedule.spaced(5.second))
       .fork
+    _ <- ZIO.logInfo(s"copyTableEffect sync_by_column_max = ${table.sync_by_column_max} sync_update_by_column_max = ${table.sync_update_by_column_max}")
     rs = sess.getDataResultSet(table, fetch_size, maxValAndCnt, appendKeys)
-    rc <- sessCh.recreateTableCopyData(table,
+    rowCount <- sessCh.recreateTableCopyData(table,
                                        rs,
                                        batch_size,
                                        maxValAndCnt
                                        )
       .tapError(er => ZIO.logError(er.getMessage) *> saveError(sess,er.getMessage,fiber,table)
       )
-    _ <- sess.setTableCopied(table, rc, table.finishStatus())
-  } yield ()
+    _ <- sess.setTableCopied(table, rowCount, table.finishStatus())
+  } yield rowCount
 
   private def updateTableColumns(sess: oraSessTask, sessCh: chSess, table: Table, fetch_size: Int, batch_size: Int):
-  ZIO[ImplTaskRepo, Throwable, Unit] =
+  ZIO[ImplTaskRepo, Throwable, Long] =
     sess.setTableBeginCopy(table) *>
       sessCh.getPkColumns(table).flatMap { pkColList =>
         updatedCopiedRowsCountFUpd(table, table.copy(name = s"upd_${table.name}"), sess, sessCh)
@@ -96,8 +95,8 @@ object WServer {
               pkColList
               )
             .flatMap {
-              rc => sess.setTableCopied(table, rc, table.finishStatus()) *>
-                sessCh.updateColumns(table,table.copy(name = s"upd_${table.name}"),pkColList)
+              rowCount => sess.setTableCopied(table, rowCount, table.finishStatus()) *>
+                sessCh.updateColumns(table,table.copy(name = s"upd_${table.name}"),pkColList) *> ZIO.succeed(rowCount)
             }
       }
 
@@ -136,18 +135,32 @@ object WServer {
     fetch_size = task.oraServer.map(_.fetch_size).getOrElse(1000)
     batch_size = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
     copyEffects = task.tables.map {table =>
-        ZIO.ifZIO(ZIO.succeed(table.update_fields.nonEmpty))(
+      ZIO.ifZIO(ZIO.succeed(table.sync_update_by_column_max.nonEmpty))(
+            copyTableEffect(sess,sessCh,table,fetch_size,batch_size) *>
+            updateTableColumns(sess,sessCh,table.copy(keyType = PrimaryKey),fetch_size,batch_size)
+          ,
+          ZIO.ifZIO(ZIO.succeed(table.update_fields.nonEmpty))(
             updateTableColumns(sess,sessCh,table.copy(keyType = PrimaryKey),fetch_size,batch_size),
             copyTableEffect(sess,sessCh,table,fetch_size,batch_size)
           )
-          .tapError(er => ZIO.logError(er.getMessage) *>
-            repo.setState(TaskState(Wait))
-          )
+        )
+
+/*        ZIO.ifZIO(ZIO.succeed(table.update_fields.nonEmpty))(
+            updateTableColumns(sess,sessCh,table.copy(keyType = PrimaryKey),fetch_size,batch_size),
+            copyTableEffect(sess,sessCh,table,fetch_size,batch_size)
+          )*/
+          .tapError(
+            er => ZIO.logError(er.getMessage)
+          ).flatMap(rowsCount => repo.setState(TaskState(Wait)) *>
+            ZIO.succeed(table,rowsCount))
           .onInterrupt {
             ZIO.logError(s"recreateTableCopyData Interrupted Oracle connection is closing")
           }
     }
-    _ <- ZIO.collectAll(copyEffects)
+    res <- ZIO.collectAll(copyEffects)
+    _ <- ZIO.foreachDiscard(res){item =>
+      ZIO.logInfo(s"item = $item")
+    }
     _ <- repo.setState(TaskState(Wait))
     _ <- repo.clearTask
     _ <- sess.taskFinished

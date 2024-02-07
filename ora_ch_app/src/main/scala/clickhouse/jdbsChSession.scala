@@ -72,7 +72,7 @@ case class chSess(sess : Connection, taskId: Int){
       val q =
         s""" select
            |        ${
-                      table.sync_by_column_max match {
+                      table.sync_by_column_max.getOrElse(table.sync_update_by_column_max) match {
                         case Some(syncSingleColumn) => s"max($syncSingleColumn)"
                         case None => " 0 "
                       }
@@ -89,7 +89,11 @@ case class chSess(sess : Connection, taskId: Int){
   } yield maxVal
 
   def getMaxColForSync(table: Table): ZIO[Any,Throwable,Option[MaxValAndCnt]] = for {
-    tblExistsCh <- isTableExistsCh(table).when(table.sync_by_column_max.nonEmpty || table.sync_by_columns.nonEmpty)
+    tblExistsCh <- isTableExistsCh(table)
+      .when(table.sync_by_column_max.nonEmpty ||
+        table.sync_update_by_column_max.nonEmpty ||
+        table.sync_by_columns.nonEmpty
+      )
     maxColCh <- getMaxValueByColCh(table).when(tblExistsCh.getOrElse(0)==1)
   } yield maxColCh
 

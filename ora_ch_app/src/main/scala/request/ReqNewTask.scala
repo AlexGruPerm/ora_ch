@@ -6,17 +6,24 @@ import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
 case class OneTable(recreate: Int = 1,
                     name: String,
-                    plsql_context_date:  OptString = Option.empty[String],
-                    pk_columns:          OptString = Option.empty[String],
-                    only_columns:        OptString = Option.empty[String],
-                    ins_select_order_by: OptString = Option.empty[String],
-                    partition_by:        OptString = Option.empty[String],
-                    notnull_columns:     OptString = Option.empty[String],
-                    where_filter:        OptString = Option.empty[String],
-                    sync_by_column_max:  OptString = Option.empty[String],
-                    update_fields:       OptString = Option.empty[String],
-                    sync_by_columns:     OptString = Option.empty[String]
+                    plsql_context_date:        OptString = Option.empty[String],
+                    pk_columns:                OptString = Option.empty[String],
+                    only_columns:              OptString = Option.empty[String],
+                    ins_select_order_by:       OptString = Option.empty[String],
+                    partition_by:              OptString = Option.empty[String],
+                    notnull_columns:           OptString = Option.empty[String],
+                    where_filter:              OptString = Option.empty[String],
+                    sync_by_column_max:        OptString = Option.empty[String],
+                    update_fields:             OptString = Option.empty[String],
+                    sync_by_columns:           OptString = Option.empty[String],
+                    sync_update_by_column_max: OptString = Option.empty[String]
                    ){
+  if (recreate == 1 && sync_update_by_column_max.nonEmpty)
+    throw new Exception("recreate = 1 incompatible with non empty sync_update_by_column_max.")
+
+  if (sync_update_by_column_max.nonEmpty && update_fields.isEmpty)
+    throw new Exception("Non empty sync_update_by_column_max incompatible with empty update_fields.")
+
   if (recreate == 1 && sync_by_columns.nonEmpty)
     throw new Exception("recreate = 1 incompatible with non empty sync_by_column_max.")
 

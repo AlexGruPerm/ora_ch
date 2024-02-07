@@ -10,16 +10,17 @@ case class Table(schema: String,
                  name: String,
                  keyType: KeyType,
                  keyColumns: String,
-                 plsql_context_date:  OptString,
-                 pk_columns:          OptString,
-                 only_columns:        OptString,
-                 ins_select_order_by: OptString,
-                 partition_by:        OptString,
-                 notnull_columns:     OptString,
-                 where_filter:        OptString,
-                 sync_by_column_max:  OptString,
-                 update_fields:       OptString,
-                 sync_by_columns:     OptString
+                 plsql_context_date:        OptString,
+                 pk_columns:                OptString,
+                 only_columns:              OptString,
+                 ins_select_order_by:       OptString,
+                 partition_by:              OptString,
+                 notnull_columns:           OptString,
+                 where_filter:              OptString,
+                 sync_by_column_max:        OptString,
+                 update_fields:             OptString,
+                 sync_by_columns:           OptString,
+                 sync_update_by_column_max: OptString
                 ){
 
   println(s"Table constr: $pk_columns - $only_columns - $notnull_columns")
