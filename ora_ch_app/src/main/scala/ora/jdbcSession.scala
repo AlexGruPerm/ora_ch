@@ -178,7 +178,7 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
 
   private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
         _ <- ZIO.logDebug(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-       _ <- ZIO.foreachDiscard((1 to rs.getMetaData.getColumnCount)) { i =>
+       _ <- ZIO.foreachDiscard(1 to rs.getMetaData.getColumnCount) { i =>
          ZIO.logDebug(
            s"""${rs.getMetaData.getColumnName(i).toLowerCase} -
               |${rs.getMetaData.getColumnTypeName(i)} -

@@ -122,7 +122,7 @@ object WServer {
     _ <- repo.setState(TaskState(Executing))
     stateAfter <- repo.getState
     taskId <- repo.getTaskId
-    _ <- ZIO.logDebug(s"[startTask] [${taskId}] State: ${stateBefore.state} -> ${stateAfter.state} ")
+    _ <- ZIO.logDebug(s"[startTask] [$taskId] State: ${stateBefore.state} -> ${stateAfter.state} ")
     sessCh <- jdbcCh.sess(taskId)
     task <- repo.ref.get
     setSchemas = task.tables.map(_.schema).toSet diff Set("system","default","information_schema")
@@ -144,11 +144,6 @@ object WServer {
             copyTableEffect(sess,sessCh,table,fetch_size,batch_size)
           )
         )
-
-/*        ZIO.ifZIO(ZIO.succeed(table.update_fields.nonEmpty))(
-            updateTableColumns(sess,sessCh,table.copy(keyType = PrimaryKey),fetch_size,batch_size),
-            copyTableEffect(sess,sessCh,table,fetch_size,batch_size)
-          )*/
           .tapError(
             er => ZIO.logError(er.getMessage)
           ).flatMap(rowsCount => repo.setState(TaskState(Wait)) *>

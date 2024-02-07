@@ -198,7 +198,7 @@ case class chSess(sess : Connection, taskId: Int){
 
   private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
     _ <- ZIO.logDebug(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    _ <- ZIO.foreachDiscard((1 to rs.getMetaData.getColumnCount)) { i =>
+    _ <- ZIO.foreachDiscard(1 to rs.getMetaData.getColumnCount) { i =>
       ZIO.logDebug(
         s"""${rs.getMetaData.getColumnName(i).toLowerCase} -
            |${rs.getMetaData.getColumnTypeName(i)} -
@@ -425,7 +425,7 @@ case class chSess(sess : Connection, taskId: Int){
                   */
                   case ("CLOB", _) => ps.setString(i, rs.getString(c.name))
                   case ("VARCHAR2", _) => ps.setString(i, rs.getString(c.name))
-                  case ("DATE", _) => {
+                  case ("DATE", _) =>
                     val tmp = rs.getString(c.name)
                     val isNull: Boolean = rs.wasNull()
                     if (!isNull) {
@@ -440,7 +440,6 @@ case class chSess(sess : Connection, taskId: Int){
                       }
                     } else
                       ps.setNull(i, Types.DATE)
-                  }
                 }
                 i + 1
             }
