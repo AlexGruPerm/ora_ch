@@ -247,7 +247,7 @@ object WServer {
       .filterOrFail(_ != 0)(0.toString)
       .retryOrElse(sched, (_: String, _: (Long, Long)) =>
         ZIO.fail(new Exception("Elapsed wait time 10 seconds of getting calcId")))
-  } yield Response.json(s"""{"calcId":"$calcId", "id_vq":"${reqCalc.view_query_id}"}""").status(Status.Ok)
+  } yield Response.json(s"""{"calcId":"$calcId"}""").status(Status.Ok)
 
   private def calc(req: Request, waitSeconds: Int): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     bodyText <- req.body.asString

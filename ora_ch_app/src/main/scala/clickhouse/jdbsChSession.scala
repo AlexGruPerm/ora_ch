@@ -72,7 +72,7 @@ case class chSess(sess : Connection, taskId: Int){
       val q =
         s""" select
            |        ${
-                      table.sync_by_column_max.getOrElse(table.sync_update_by_column_max) match {
+                      table.sync_by_column_max orElse table.sync_update_by_column_max match {
                         case Some(syncSingleColumn) => s"max($syncSingleColumn)"
                         case None => " 0 "
                       }

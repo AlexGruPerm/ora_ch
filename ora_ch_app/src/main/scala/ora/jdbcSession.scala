@@ -257,10 +257,16 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
       val contextSql =
         s"""
            | begin
-           |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
-           |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+           |   msk_analytics.set_curr_date_context($ctxDate);
+           |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC','$ctxDate');
            |end;
            |""".stripMargin
+/*      s"""
+         | begin
+         |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+         |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+         |end;
+         |""".stripMargin*/
       val prep = sess.prepareCall(contextSql)
       prep.execute()
     } else ()
@@ -302,7 +308,7 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
               }
             select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
           ( table.where_filter,
-            table.sync_by_column_max.getOrElse(table.sync_update_by_column_max),
+            table.sync_by_column_max orElse table.sync_update_by_column_max,
             table.sync_by_columns)
           match {
             case (Some(where), Some(syncCol), None) => s" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
@@ -357,10 +363,17 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
         val contextSql =
           s"""
              | begin
-             |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
-             |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+             |   msk_analytics.set_curr_date_context($ctxDate);
+             |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC','$ctxDate');
              |end;
              |""".stripMargin
+
+/*        s"""
+           | begin
+           |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+           |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
+           |end;
+           |""".stripMargin*/
         val prec = sess.prepareCall(contextSql)
         prec.execute()
       } else ()
