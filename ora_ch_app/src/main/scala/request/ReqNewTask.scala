@@ -6,7 +6,8 @@ import zio.json.{DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder}
 
 case class OneTable(recreate: Int = 1,
                     name: String,
-                    plsql_context_date:        OptString = Option.empty[String],
+                    curr_date_context:         OptString = Option.empty[String],
+                    analyt_datecalc:           OptString = Option.empty[String],
                     pk_columns:                OptString = Option.empty[String],
                     only_columns:              OptString = Option.empty[String],
                     ins_select_order_by:       OptString = Option.empty[String],

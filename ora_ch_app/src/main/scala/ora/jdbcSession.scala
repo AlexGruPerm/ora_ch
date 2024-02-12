@@ -252,21 +252,21 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
 case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
 
   private def setContext(table: Table): Unit =
-    if (table.plsql_context_date.nonEmpty) {
-      val ctxDate: String = table.plsql_context_date.getOrElse(" ")
+    if (table.curr_date_context.nonEmpty && table.analyt_datecalc.nonEmpty) {
+      val currDateContext = table.curr_date_context.getOrElse(" ")
+      val analytDateCalc = table.analyt_datecalc.getOrElse(" ")
+
+      println(s" >>>>>>>>>>>>>> currDateContext = $currDateContext")
+      println(s" >>>>>>>>>>>>>> analytDateCalc  = $analytDateCalc")
+
+
       val contextSql =
         s"""
            | begin
-           |   msk_analytics.set_curr_date_context($ctxDate);
-           |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC','$ctxDate');
+           |   msk_analytics.set_curr_date_context('$currDateContext');
+           |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC','$analytDateCalc');
            |end;
            |""".stripMargin
-/*      s"""
-         | begin
-         |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
-         |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
-         |end;
-         |""".stripMargin*/
       val prep = sess.prepareCall(contextSql)
       prep.execute()
     } else ()
@@ -332,7 +332,7 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
         .executeQuery(dataQuery)
       dataRs.setFetchSize(fetch_size)
       ResultSetWithQuery(dataRs,dataQuery)
-    }.tapBoth(er => ZIO.logError(er.getMessage),
+    }.tapBoth(er => ZIO.logError(s"Exception: ${er.getMessage} curr_date_context=${table.curr_date_context}"),
       rsq => ZIO.logDebug(s"getDataResultSet select = ${rsq.query} "))
   } yield rsWithQuery.rs
 
@@ -358,25 +358,22 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
       }
       println(s"getDataResultSetForUpdate dataQuery = $dataQuery")
       //********************* CONTEXT *************************
+      setContext(table)
+      /*
       val ctxDate: String = table.plsql_context_date.getOrElse(" ")
+      println(s" >>>>>>>>>>>>>> CONTEXT DATE $ctxDate")
       if (table.plsql_context_date.nonEmpty) {
         val contextSql =
           s"""
              | begin
-             |   msk_analytics.set_curr_date_context($ctxDate);
+             |   msk_analytics.set_curr_date_context('$ctxDate');
              |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC','$ctxDate');
              |end;
              |""".stripMargin
-
-/*        s"""
-           | begin
-           |   msk_analytics.set_curr_date_context(to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
-           |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC',to_char(to_date($ctxDate,'yyyymmdd'),'dd.mm.yyyy'));
-           |end;
-           |""".stripMargin*/
         val prec = sess.prepareCall(contextSql)
         prec.execute()
       } else ()
+      */
       //*******************************************************
       val dateQueryWithOrd: String = s"$dataQuery ${table.orderBy()}"
 
@@ -592,7 +589,8 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
                 st.schema,
                 ot.recreate,ot.name,
                 kt, kc,
-                ot.plsql_context_date,
+                ot.curr_date_context,
+                ot.analyt_datecalc,
                 ot.pk_columns,
                 ot.only_columns,
                 ot.ins_select_order_by,
