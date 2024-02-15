@@ -18,7 +18,7 @@ import calc.EncDecReqCalcImplicits._
 import common.{SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _}
 import connrepo.OraConnRepoImpl
 import server.WServer.{calc, startTask}
-import table.{PrimaryKey, Table}
+import table.Table
 import zio.json.JsonDecoder.fromCodec
 
 import java.io.IOException
