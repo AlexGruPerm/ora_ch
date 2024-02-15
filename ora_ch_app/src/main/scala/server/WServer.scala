@@ -212,7 +212,7 @@ object WServer {
                ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer,
                ZLayer.succeed(SessCalc)
              ).forkDaemon
-             schedule = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
+             schedule = Schedule.spaced(250.millisecond) && Schedule.recurs(waitSeconds)
              taskId <- repo.getTaskId
                .filterOrFail(_ != 0)(0.toString)
                .retryOrElse(schedule, (_: String, _: (Long, Long)) =>
