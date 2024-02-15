@@ -108,8 +108,6 @@ object WServer {
     jdbcCh <- ZIO.service[jdbcChSession]
     sess <- oraSess.sessTask("startTask")
     taskId <- sess.getTaskIdFromSess
-    //getTables - takes a relatively long time to complete.
-    //set new taskId before calling getTables
     _ <- repo.setTaskId(taskId)
     t <- sess.getTables(newtask.schemas)
     wstask = WsTask(id = taskId,
@@ -178,7 +176,7 @@ object WServer {
     repo <- ZIO.service[ImplTaskRepo]
     currStatus <- repo.getState
     taskId <- repo.getTaskId
-    _ <- ZIO.logInfo(s"Repo currStatus = ${currStatus.state}")
+    _ <- ZIO.logDebug(s"Repo currStatus = ${currStatus.state}")
     _ <- ZIO.fail(new Exception(
       s" already running id = $taskId ,look at tables: ora_to_ch_tasks, ora_to_ch_tasks_tables "))
       .when(currStatus.state != Wait)
@@ -226,7 +224,8 @@ object WServer {
   private def addOnInterr[R,E,A](eff: ZIO[R,E,A],desc: String): ZIO[R,E,A] =
     eff.onInterrupt(CalcLogic.debugInterruption(desc))
 
-  private def calcAndCopy(reqCalc: ReqCalcSrc, waitSeconds: Int): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
+  private def calcAndCopy(reqCalc: ReqCalcSrc, waitSeconds: Int):
+  ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo <- ZIO.service[ImplCalcRepo]
     _ <- currStatusCheckerCalc()
     meta = CalcLogic.getCalcMeta(reqCalc)

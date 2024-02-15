@@ -177,9 +177,8 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
   } yield vqMeta
 
   private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
-        _ <- ZIO.logDebug(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
        _ <- ZIO.foreachDiscard(1 to rs.getMetaData.getColumnCount) { i =>
-         ZIO.logDebug(
+         ZIO.logTrace(
            s"""${rs.getMetaData.getColumnName(i).toLowerCase} -
               |${rs.getMetaData.getColumnTypeName(i)} -
               |${rs.getMetaData.getColumnClassName(i)} -
@@ -188,7 +187,6 @@ case class oraSessCalc(sess : Connection, calcId: Int) extends oraSess {
               |${rs.getMetaData.getScale(i)}
               |""".stripMargin)
        }
-       _ <- ZIO.logDebug(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
   } yield ()
 
   def getColumnsFromRs(rs: ResultSet): ZIO[Any, Throwable, List[OraChColumn]] = for {
@@ -574,7 +572,7 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
                     tableName: String,
                     pk_columns: Option[String]): ZIO[Any, Throwable, (KeyType,String)] = for {
     ktc <- pk_columns match {
-      case Some(ext_pk_cols) => ZIO.succeed((ExtPrimaryKey, ext_pk_cols))
+      case Some(pkColumnsFromJson) => ZIO.succeed((ExtPrimaryKey, pkColumnsFromJson))
       case None => getKeyType(schema, tableName)
     }
   } yield ktc
@@ -582,25 +580,26 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
   def getTables(stables: List[SrcTable]): ZIO[Any, Throwable, List[Table]] =
     ZIO.collectAll {
       stables.flatMap { st =>
-        st.tables.map{ot =>
-          getPk(st.schema,ot.name,ot.pk_columns).map{
-            case (kt: KeyType,kc: String) =>
+        st.tables.map{ t =>
+          getPk(st.schema,t.name,t.pk_columns)
+            .map{
+            case (keytype: KeyType, keycolumns: String) =>
               Table(
                 st.schema,
-                ot.recreate,ot.name,
-                kt, kc,
-                ot.curr_date_context,
-                ot.analyt_datecalc,
-                ot.pk_columns,
-                ot.only_columns,
-                ot.ins_select_order_by,
-                ot.partition_by,
-                ot.notnull_columns,
-                ot.where_filter,
-                ot.sync_by_column_max,
-                ot.update_fields,
-                ot.sync_by_columns,
-                ot.sync_update_by_column_max)
+                t.recreate,t.name,
+                keytype, keycolumns,
+                t.curr_date_context,
+                t.analyt_datecalc,
+                t.pk_columns,
+                t.only_columns,
+                t.ins_select_order_by,
+                t.partition_by,
+                t.notnull_columns,
+                t.where_filter,
+                t.sync_by_column_max,
+                t.update_fields,
+                t.sync_by_columns,
+                t.sync_update_by_column_max)
           }
         }
       }

@@ -211,25 +211,6 @@ case class chSess(sess : Connection, taskId: Int){
     _ <- ZIO.logDebug(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
   } yield ()
 
-  /**
-   * return count of copied rows.
-   *
-   * maybe we need use query for varchar columns:
-   *
-   * select atc.COLUMN_NAME,atc.CHAR_USED
-   * from  ALL_TAB_COLUMNS atc
-   * where atc.OWNER='MSK_ANALYTICS' and
-   * atc.TABLE_NAME='V_GP_KBK_UN' and
-   * atc.COLUMN_NAME='CR_CODE' and
-   * atc.DATA_TYPE='VARCHAR2'
-   * order by atc.COLUMN_ID
-   *
-   * CHAR_USED can be B(Byte) or C(Char)
-   *
-   * Not works:
-   * oraConn.getMetaData.getColumns(null,"msk_analytics","v_gp_kbk_un","cr_code").getInt("CHAR_OCTET_LENGTH")
-   *
-  */
   def recreateTableCopyData(table: Table,
                             rs: ZIO[Any, Throwable, ResultSet],
                             batch_size: Int,
@@ -248,9 +229,9 @@ case class chSess(sess : Connection, taskId: Int){
           oraRs.getMetaData.getColumnDisplaySize(i),
           //todo: now it's just hard code.
           //https://github.com/AlexGruPerm/ora_ch/issues/2
-          if (oraRs.getMetaData.getColumnName(i).toLowerCase == "cr_code")
+/*          if (oraRs.getMetaData.getColumnName(i).toLowerCase == "cr_code")
               oraRs.getMetaData.getPrecision(i)*2
-            else
+            else*/
               oraRs.getMetaData.getPrecision(i),
           oraRs.getMetaData.getScale(i),
           oraRs.getMetaData.isNullable(i),
@@ -359,9 +340,9 @@ case class chSess(sess : Connection, taskId: Int){
             oraRs.getMetaData.getColumnClassName(i),
             oraRs.getMetaData.getColumnDisplaySize(i),
             //todo: https://github.com/AlexGruPerm/ora_ch/issues/2
-            if (oraRs.getMetaData.getColumnName(i).toLowerCase == "cr_code")
+/*            if (oraRs.getMetaData.getColumnName(i).toLowerCase == "cr_code")
               oraRs.getMetaData.getPrecision(i) * 2
-            else
+            else*/
               oraRs.getMetaData.getPrecision(i),
             oraRs.getMetaData.getScale(i),
             oraRs.getMetaData.isNullable(i),
