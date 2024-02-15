@@ -298,13 +298,8 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
     rsWithQuery <- ZIO.attemptBlocking {
       val whereByFields: String = getAppendByFieldsPart(table,appendKeys)
       val dataQuery =
-        s""" ${
-               table.keyType match {
-                 case RnKey => " select row_number() over(order by null) as rn,t.* from ( "
-                 case _     => " "
-               }
-              }
-            select ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
+        s"""
+            select /*+ ALL_ROWS */ ${table.only_columns.getOrElse("*")} from ${table.schema}.${table.name} ${
           ( table.where_filter,
             table.sync_by_column_max orElse table.sync_update_by_column_max,
             table.sync_by_columns)
@@ -314,11 +309,6 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
             case (_, None, Some(_))                 => s" where $whereByFields "
             case (_, Some(syncCol), None)           => s" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
             case (Some(where), _, _)                => s" where $where "
-            case _ => " "
-          }
-        } ${
-          table.keyType match {
-            case RnKey => " ) t "
             case _ => " "
           }
         }
@@ -348,33 +338,10 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
     _ <- ZIO.unit
     selectColumns = s"${pkColumns.mkString(",")},${table.updateColumns()} "
     rs <- ZIO.attemptBlocking {
-      val dataQuery = {
-        table.keyType match {
-          case PrimaryKey => s"select $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
-          case _ => throw new Exception("Update fields on table without primary key not possible.")
-        }
-      }
+      val dataQuery = s"select /*+ ALL_ROWS */ $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
       println(s"getDataResultSetForUpdate dataQuery = $dataQuery")
-      //********************* CONTEXT *************************
       setContext(table)
-      /*
-      val ctxDate: String = table.plsql_context_date.getOrElse(" ")
-      println(s" >>>>>>>>>>>>>> CONTEXT DATE $ctxDate")
-      if (table.plsql_context_date.nonEmpty) {
-        val contextSql =
-          s"""
-             | begin
-             |   msk_analytics.set_curr_date_context('$ctxDate');
-             |   DBMS_SESSION.SET_CONTEXT('CLIENTCONTEXT','ANALYT_DATECALC','$ctxDate');
-             |end;
-             |""".stripMargin
-        val prec = sess.prepareCall(contextSql)
-        prec.execute()
-      } else ()
-      */
-      //*******************************************************
       val dateQueryWithOrd: String = s"$dataQuery ${table.orderBy()}"
-
       val dataRs = sess.createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
         .executeQuery(dateQueryWithOrd)
       dataRs.setFetchSize(fetch_size)
@@ -568,26 +535,13 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
     _ <- ZIO.logInfo(s" For $schema.$tableName KEY = ${key._1} - ${key._2}")
   } yield key
 
-  private def getPk(schema: String,
-                    tableName: String,
-                    pk_columns: Option[String]): ZIO[Any, Throwable, (KeyType,String)] = for {
-    ktc <- pk_columns match {
-      case Some(pkColumnsFromJson) => ZIO.succeed((ExtPrimaryKey, pkColumnsFromJson))
-      case None => getKeyType(schema, tableName)
-    }
-  } yield ktc
-
   def getTables(stables: List[SrcTable]): ZIO[Any, Throwable, List[Table]] =
     ZIO.collectAll {
       stables.flatMap { st =>
         st.tables.map{ t =>
-          getPk(st.schema,t.name,t.pk_columns)
-            .map{
-            case (keytype: KeyType, keycolumns: String) =>
-              Table(
+              ZIO.succeed(Table(
                 st.schema,
                 t.recreate,t.name,
-                keytype, keycolumns,
                 t.curr_date_context,
                 t.analyt_datecalc,
                 t.pk_columns,
@@ -599,8 +553,7 @@ case class oraSessTask(sess : Connection, taskId: Int) extends oraSess{
                 t.sync_by_column_max,
                 t.update_fields,
                 t.sync_by_columns,
-                t.sync_update_by_column_max)
-          }
+                t.sync_update_by_column_max))
         }
       }
     }

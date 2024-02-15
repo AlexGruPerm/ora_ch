@@ -135,10 +135,10 @@ object WServer {
     copyEffects = task.tables.map {table =>
       ZIO.ifZIO(ZIO.succeed(table.sync_update_by_column_max.nonEmpty))(
             copyTableEffect(sess,sessCh,table,fetch_size,batch_size) *>
-            updateTableColumns(sess,sessCh,table.copy(keyType = PrimaryKey),fetch_size,batch_size)
+            updateTableColumns(sess,sessCh,table,fetch_size,batch_size)
           ,
           ZIO.ifZIO(ZIO.succeed(table.update_fields.nonEmpty))(
-            updateTableColumns(sess,sessCh,table.copy(keyType = PrimaryKey),fetch_size,batch_size),
+            updateTableColumns(sess,sessCh,table,fetch_size,batch_size),
             copyTableEffect(sess,sessCh,table,fetch_size,batch_size)
           )
         )

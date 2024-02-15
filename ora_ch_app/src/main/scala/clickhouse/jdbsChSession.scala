@@ -239,7 +239,7 @@ case class chSess(sess : Connection, taskId: Int){
         )).toList
     nakedCols = cols.map(chCol => chCol.name).mkString(",\n")
     colsScript = cols.map(chCol => chCol.clColumnString).mkString(",\n")
-    _ <- ZIO.logDebug(s"keyType = ${table.keyType.toString} External pk_columns = ${table.pk_columns}")
+    _ <- ZIO.logDebug(s"pk_columns = ${table.pk_columns}")
 
     createScript =
       s"""create table ${table.schema}.${table.name}
@@ -252,13 +252,7 @@ case class chSess(sess : Connection, taskId: Int){
                case None => " "
              }
             }
-         | ${
-              table.keyType match {
-                case ExtPrimaryKey => s"PRIMARY KEY (${table.pk_columns.getOrElse(table.keyColumns)})"
-                case PrimaryKey => s"PRIMARY KEY (${table.keyColumns})"
-                case RnKey | UniqueKey  => s"ORDER BY (${table.keyColumns})"
-              }
-            }
+         | PRIMARY KEY (${table.pk_columns})
          |""".stripMargin
     _ <- ZIO.logDebug(s"createScript = $createScript")
     insQuer =
