@@ -129,18 +129,15 @@ case class chSess(sess : Connection, taskId: Int){
   } yield res
 
   def whereAppendInt1(table: Table): ZIO[Any, Throwable, Option[List[Int]]] = for {
-    _ <- ZIO.logInfo(s"whereAppendInt1 - ${table.name}")
     res <- getSyncWhereFilterRsTuples(table)
   } yield
     Some(res.map(_.asInstanceOf[Int]))
 
   def whereAppendInt2(table: Table): ZIO[Any, Throwable, Option[List[(Int,Int)]]] = for {
-    _ <- ZIO.logInfo(s"whereAppendInt2 - ${table.name}")
     res <- getSyncWhereFilterRsTuples(table)
   } yield Some(res.map(_.asInstanceOf[(Int,Int)]))
 
   def whereAppendInt3(table: Table): ZIO[Any, Throwable, Option[List[(Int,Int,Int)]]] = for {
-    _ <- ZIO.logInfo(s"whereAppendInt3 - ${table.name}")
     res <- getSyncWhereFilterRsTuples(table)
   } yield  Some(res.map(_.asInstanceOf[(Int,Int,Int)]))
 
@@ -197,9 +194,8 @@ case class chSess(sess : Connection, taskId: Int){
   } yield rows
 
   private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
-    _ <- ZIO.logDebug(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
     _ <- ZIO.foreachDiscard(1 to rs.getMetaData.getColumnCount) { i =>
-      ZIO.logDebug(
+      ZIO.logTrace(
         s"""${rs.getMetaData.getColumnName(i).toLowerCase} -
            |${rs.getMetaData.getColumnTypeName(i)} -
            |${rs.getMetaData.getColumnClassName(i)} -
@@ -208,7 +204,6 @@ case class chSess(sess : Connection, taskId: Int){
            |${rs.getMetaData.getScale(i)}
            |""".stripMargin)
     }
-    _ <- ZIO.logDebug(s"~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
   } yield ()
 
   def recreateTableCopyData(table: Table,
@@ -227,12 +222,7 @@ case class chSess(sess : Connection, taskId: Int){
           oraRs.getMetaData.getColumnTypeName(i),
           oraRs.getMetaData.getColumnClassName(i),
           oraRs.getMetaData.getColumnDisplaySize(i),
-          //todo: now it's just hard code.
-          //https://github.com/AlexGruPerm/ora_ch/issues/2
-/*          if (oraRs.getMetaData.getColumnName(i).toLowerCase == "cr_code")
-              oraRs.getMetaData.getPrecision(i)*2
-            else*/
-              oraRs.getMetaData.getPrecision(i),
+          oraRs.getMetaData.getPrecision(i),
           oraRs.getMetaData.getScale(i),
           oraRs.getMetaData.isNullable(i),
           table.notnull_columns
@@ -271,7 +261,6 @@ case class chSess(sess : Connection, taskId: Int){
       .when(table.recreate==1)
 
     rows <- ZIO.attemptBlockingInterrupt {
-      //------------------------------------
       val ps: PreparedStatement = sess.prepareStatement(insQuer)
       Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) {
         case (counter, rs) =>
@@ -333,11 +322,7 @@ case class chSess(sess : Connection, taskId: Int){
             oraRs.getMetaData.getColumnTypeName(i),
             oraRs.getMetaData.getColumnClassName(i),
             oraRs.getMetaData.getColumnDisplaySize(i),
-            //todo: https://github.com/AlexGruPerm/ora_ch/issues/2
-/*            if (oraRs.getMetaData.getColumnName(i).toLowerCase == "cr_code")
-              oraRs.getMetaData.getPrecision(i) * 2
-            else*/
-              oraRs.getMetaData.getPrecision(i),
+            oraRs.getMetaData.getPrecision(i),
             oraRs.getMetaData.getScale(i),
             oraRs.getMetaData.isNullable(i),
             table.notnull_columns
@@ -377,27 +362,7 @@ case class chSess(sess : Connection, taskId: Int){
                 (c.typeName, c.scale) match {
                   // Long - because getInt is that 4294967298 is outside the range of Java's int
                   case ("NUMBER", 0) => ps.setLong(i, rs.getLong(c.name))
-                  /*                  {
-                                  println(s"NUMBER_0 ${c.name}")
-                                  val intVal: Long = rs.getLong(c.name)
-                                  println(s"intVal = $intVal")
-                                  ps.setLong(i, intVal)
-                                  //ps.SetLong ???
-                                }*/
                   case ("NUMBER", _) => ps.setDouble(i, rs.getDouble(c.name))
-                  /*                  {
-                                  println(s"NUMBER__ ${c.name}")
-                                  val dblVal: Double = rs.getDouble(c.name)
-                                  println(s"dblVal = $dblVal")
-                                  ps.setDouble(i, dblVal)
-                                }*/
-                  /*
-                    {
-                    val d: java.math.BigDecimal = rs.getBigDecimal(c.name)
-                    println(s"BigDecimal value = $d")
-                    ps.setBigDecimal(i,d)
-                  }
-                  */
                   case ("CLOB", _) => ps.setString(i, rs.getString(c.name))
                   case ("VARCHAR2", _) => ps.setString(i, rs.getString(c.name))
                   case ("DATE", _) =>
@@ -437,7 +402,6 @@ case class chSess(sess : Connection, taskId: Int){
         rsRowCount.next()
         val rowCount = rsRowCount.getLong(1)
         rsRowCount.close()
-        //rowCount //(rowCount,insQuer) with scala 3.4
         AppendRowsWQuery(rowCount, insertQuery)
       }.tapBoth(er => ZIO.logError(er.getMessage),
         rq => ZIO.logDebug(s"recreateTableCopyDataForUpdate insert = ${rq.query}"))
@@ -525,6 +489,11 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
     _ <- ZIO.unit
     sess <- ZIO.attemptBlocking {
       props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
+      /** Try different HTTP libraries:
+       * HTTP_CLIENT
+       * HTTP_URL_CONNECTION
+       * APACHE_HTTP_CLIENT
+      */
       val dataSource = new ClickHouseDataSource(ch.getUrl, props)
       val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
       chSess(conn,taskId)

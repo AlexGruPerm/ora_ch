@@ -45,9 +45,9 @@ object OraChColumn {
       typeName match {
         case "NUMBER" => scale match {
           case 0 => "UInt64"
-          case _ => "Decimal128(6)" //"Decimal64(6)"
+          case _ => "Decimal128(6)"
         }
-        case "VARCHAR2" => "String"//s"FixedString($precision)"
+        case "VARCHAR2" => "String"
         case "DATE" => "DateTime"
         case "CLOB" => "String"
         case _ => "UNDEFINED_COL_TYPE"
