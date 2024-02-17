@@ -34,7 +34,7 @@ object OraConnRepoImpl {
 
   private def acquire(conf: OraServer): ZIO[Any,Exception,Connection] = for{
     _ <- ZIO.logInfo(s"OraConnRepoImpl.acquire CREATE NEW ORACLE CONNECTION >>>>>>>>>>>>>>>>>>>>>>>>>>>>")
-    connection <- ZIO.attemptBlocking {
+    connection <- ZIO.attemptBlockingInterrupt {
       DriverManager.registerDriver(new OracleDriver())
       val props = new Properties()
       props.setProperty("user", conf.user)

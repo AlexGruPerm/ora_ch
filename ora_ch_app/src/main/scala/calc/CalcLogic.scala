@@ -28,13 +28,13 @@ object CalcLogic {
 
   private def truncTable(meta: ViewQueryMeta): ZIO[jdbcChSession, Throwable, Unit] = for {
     chSession <- ZIO.service[jdbcChSession]
-    ch <- chSession.sess(0) //todo: 0 - just for debug, there is no task when we calc.
+    ch <- chSession.sess(0)
     _ <- ch.truncateTable(meta)
   } yield ()
 
   private def insertFromQuery(meta: ViewQueryMeta, reqCalc: ReqCalcSrc): ZIO[jdbcSession with jdbcChSession, Throwable, Unit] = for {
     chSession <- ZIO.service[jdbcChSession]
-    ch <- chSession.sess(0) //todo: 0 - just for debug, there is no task when we calc.
+    ch <- chSession.sess(0)
     _ <- ch.insertFromQuery(meta,reqCalc.params)
   } yield ()
 
@@ -131,7 +131,7 @@ object CalcLogic {
     stateBefore <- repo.getState
     _ <- ZIO.logInfo(s"Begin copyDataChOra ${reqCalc.view_query_id} ${meta.chTable}")
     chSession <- ZIO.service[jdbcChSession]
-    ch <- chSession.sess(0) //todo: 0 - just for debug, there is no task when we calc.
+    ch <- chSession.sess(0)
     chTableRs <- ch.getChTableResultSet(meta)
     oraSession <- ZIO.service[jdbcSession]
     ora <- oraSession.sessCalc(debugMsg = "copyDataChOra")

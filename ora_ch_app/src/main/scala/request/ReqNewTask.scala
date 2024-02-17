@@ -44,14 +44,11 @@ case class OneTable(recreate: Int = 1,
 
 case class SrcTable(schema: String, tables: List[OneTable])
 
-case class Servers(oracle: OraServer,
-                   clickhouse: ClickhouseServer
-                  )
+case class Servers(oracle: OraServer, clickhouse: ClickhouseServer)
 
 case class ReqNewTask(servers: Servers, schemas: List[SrcTable] = List.empty[SrcTable]){
   if (schemas.exists(st => st.tables.isEmpty))
     throw new Exception(s"tables array is empty for schema ${schemas.find(st => st.tables.isEmpty).map(s => s.schema)}")
-
 }
 
 object EncDecReqNewTaskImplicits{

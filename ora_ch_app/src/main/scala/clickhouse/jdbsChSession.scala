@@ -10,7 +10,7 @@ import conf.ClickhouseServer
 import table._
 import zio.{ZIO, ZLayer}
 
-import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, Types}
+import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Types}
 import java.time.{LocalDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
 import java.util.Properties
@@ -24,7 +24,7 @@ case class chSess(sess : Connection, taskId: Int){
     LocalDateTime.parse(s, formatter).toEpochSecond(ZoneOffset.UTC)
 
   def isTableExistsCh(table: Table): ZIO[Any, Throwable, Int] = for {
-    tblExists <- ZIO.attemptBlocking {
+    tblExists <- ZIO.attemptBlockingInterrupt {
       val rs = sess.createStatement.executeQuery(
         s"""
            | select if(exists(
@@ -42,7 +42,7 @@ case class chSess(sess : Connection, taskId: Int){
   } yield tblExists
 
   def updateColumns(updateTable: Table, updTable: Table, pkColumns: List[String] ): ZIO[Any,Throwable,Unit] = for {
-    _ <- ZIO.attemptBlocking {
+    _ <- ZIO.attemptBlockingInterrupt {
       val pkColsStr = pkColumns.mkString(",")
       val updateColsSql = updateTable.update_fields.getOrElse("empty_update_fields").split(",").map{
         col=>
@@ -64,7 +64,7 @@ case class chSess(sess : Connection, taskId: Int){
   } yield ()
 
   def getMaxValueByColCh(table: Table): ZIO[Any,Throwable,MaxValAndCnt] = for {
-    maxVal <- ZIO.attemptBlocking {
+    maxVal <- ZIO.attemptBlockingInterrupt {
       /** We have 2 append mode:
        * 1) sync_by_column_max - single column    In this case we need to know current maxVal.
        * 2) sync_by_columns - by multiple fields. In this case don't need maxVal
@@ -98,7 +98,7 @@ case class chSess(sess : Connection, taskId: Int){
   } yield maxColCh
 
   private def getSyncWhereFilterRsTuples(table: Table): ZIO[Any, Throwable, List[Any]] = for {
-    res <- ZIO.attemptBlocking {
+    res <- ZIO.attemptBlockingInterrupt {
       val q =
         s""" select distinct ${table.sync_by_columns.getOrElse(" CH_EMPTY_SYNC_COLUMNS ")}
            |   from ${table.schema.toLowerCase}.${table.name.toLowerCase} """
@@ -151,7 +151,7 @@ case class chSess(sess : Connection, taskId: Int){
    * t.name='evc'
   */
   def getPkColumns(table: Table): ZIO[Any,Throwable,List[String]] = for {
-    pkString <- ZIO.attemptBlocking {
+    pkString <- ZIO.attemptBlockingInterrupt {
       val rs = sess.createStatement.executeQuery(
         s"""
            | select t.primary_key
@@ -169,14 +169,13 @@ case class chSess(sess : Connection, taskId: Int){
   /**
    * return count of copied rows.
    */
-  def getCountCopiedRows(table: Table): ZIO[Any, Nothing, Long] = for {
-    rows <- ZIO.attempt {
+  def getCountCopiedRows(table: Table): ZIO[Any, Exception, Long] = for {
+    rows <- ZIO.attemptBlockingInterrupt {
       val rsRowCount = sess.createStatement.executeQuery(s"select count() as cnt from ${table.schema}.${table.name}")
       rsRowCount.next()
       val rowCount = rsRowCount.getLong(1)
       rowCount
-      }.tapError(er => ZIO.logError(er.getMessage))
-      .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
+      }.refineToOrDie[SQLException]
   } yield rows
 
   def getCountCopiedRowsFUpd(table: Table): ZIO[Any, Nothing, Long] = for {
@@ -260,7 +259,7 @@ case class chSess(sess : Connection, taskId: Int){
     }.tapError(er => ZIO.logError(er.getMessage))
       .when(table.recreate==1)
 
-    rows <- ZIO.attemptBlockingInterrupt {
+    rows <- ZIO.attemptBlockingInterrupt{
       val ps: PreparedStatement = sess.prepareStatement(insQuer)
       Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) {
         case (counter, rs) =>
@@ -303,7 +302,7 @@ case class chSess(sess : Connection, taskId: Int){
       val rowCount = rsRowCount.getLong(1)
       rsRowCount.close()
       rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
-    }.tapError(er => ZIO.logError(er.getMessage))
+    }.refineToOrDie[SQLException]
     _ <- ZIO.logInfo(s"Copied $rows rows to ${table.schema}.${table.name}")
   } yield rows
 
@@ -351,7 +350,6 @@ case class chSess(sess : Connection, taskId: Int){
       }.tapBoth(er => ZIO.logError(er.getMessage),
         createScript => ZIO.logDebug(s"recreateTableCopyDataForUpdate createScript = $createScript")
       )
-      //todo: (rows: Int,query: String) with scala 3.4 and use tapBoth
       rowsWithQuery <- ZIO.attemptBlockingInterrupt {
         //------------------------------------
         val ps: PreparedStatement = sess.prepareStatement(insertQuery)
@@ -412,7 +410,7 @@ case class chSess(sess : Connection, taskId: Int){
     _ <- ZIO.unit
     _ <- ZIO.foreachDiscard(schemas) {
       schema =>
-        ZIO.attemptBlocking {
+        ZIO.attemptBlockingInterrupt {
           val query: String =
             s"CREATE DATABASE IF NOT EXISTS $schema"
           val rs: ResultSet = sess.createStatement.executeQuery(query)
@@ -487,7 +485,7 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
 
   override def chConnection(taskId: Int): ZIO[Any, Throwable, chSess] = for {
     _ <- ZIO.unit
-    sess <- ZIO.attemptBlocking {
+    sess <- ZIO.attemptBlockingInterrupt {
       props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
       /** Try different HTTP libraries:
        * HTTP_CLIENT
