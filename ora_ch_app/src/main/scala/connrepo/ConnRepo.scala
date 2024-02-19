@@ -4,7 +4,7 @@ import conf.OraServer
 import oracle.jdbc.OracleDriver
 import zio.{Ref, Scope, ZIO, ZLayer}
 
-import java.sql.{Connection, DriverManager, ResultSet}
+import java.sql.{Connection, DriverManager, ResultSet, SQLException}
 import java.util.Properties
 
 /**
@@ -13,7 +13,7 @@ import java.util.Properties
  * Only this one single session using during Task or Calc.
 */
 trait OraConnRepo {
-  def getConnection(): ZIO[Any, Nothing,Connection]
+  def getConnection(): ZIO[Any, SQLException,Connection]
   def getUrl(): ZIO[Any, Nothing, String]
 }
 
@@ -23,7 +23,7 @@ trait OraConnRepo {
  * All the dependencies are just interfaces, not implementation.
 */
 case class OraConnRepoImpl(conf: OraServer, ref: Ref[Connection]) extends OraConnRepo{
-  def getConnection(): ZIO[Any, Nothing, Connection] = ref.get
+  def getConnection(): ZIO[Any, SQLException, Connection] = ref.get
   def getUrl(): ZIO[Any, Nothing, String] = ZIO.succeed(conf.getUrl())
 }
 

@@ -115,11 +115,8 @@ object WServer {
       clickhouseServer = Some(newtask.servers.clickhouse),
       tables = t)
     _ <- repo.create(wstask)
-    stateBefore <- repo.getState
     _ <- repo.setState(TaskState(Executing))
-    stateAfter <- repo.getState
     taskId <- repo.getTaskId
-    _ <- ZIO.logDebug(s"[startTask] [$taskId] State: ${stateBefore.state} -> ${stateAfter.state} ")
     sessCh <- jdbcCh.sess(taskId)
     task <- repo.ref.get
     setSchemas = task.tables.map(_.schema).toSet diff Set("system","default","information_schema")

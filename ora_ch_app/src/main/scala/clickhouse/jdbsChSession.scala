@@ -23,7 +23,7 @@ case class chSess(sess : Connection, taskId: Int){
   def dateTimeStringToEpoch(s: String): Long =
     LocalDateTime.parse(s, formatter).toEpochSecond(ZoneOffset.UTC)
 
-  def isTableExistsCh(table: Table): ZIO[Any, Throwable, Int] = for {
+  def isTableExistsCh(table: Table): ZIO[Any, SQLException, Int] = for {
     tblExists <- ZIO.attemptBlockingInterrupt {
       val rs = sess.createStatement.executeQuery(
         s"""
@@ -39,9 +39,10 @@ case class chSess(sess : Connection, taskId: Int){
       rs.close()
       resTblEx
     }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
   } yield tblExists
 
-  def updateColumns(updateTable: Table, updTable: Table, pkColumns: List[String] ): ZIO[Any,Throwable,Unit] = for {
+  def updateColumns(updateTable: Table, updTable: Table, pkColumns: List[String] ): ZIO[Any,SQLException,Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
       val pkColsStr = pkColumns.mkString(",")
       val updateColsSql = updateTable.update_fields.getOrElse("empty_update_fields").split(",").map{
@@ -60,10 +61,10 @@ case class chSess(sess : Connection, taskId: Int){
       updateQuery
     }.tapBoth(er => ZIO.logError(er.getMessage),
       update => ZIO.logDebug(s"updateColumns query = $update")
-    )
+    ).refineToOrDie[SQLException]
   } yield ()
 
-  def getMaxValueByColCh(table: Table): ZIO[Any,Throwable,MaxValAndCnt] = for {
+  def getMaxValueByColCh(table: Table): ZIO[Any,SQLException,MaxValAndCnt] = for {
     maxVal <- ZIO.attemptBlockingInterrupt {
       /** We have 2 append mode:
        * 1) sync_by_column_max - single column    In this case we need to know current maxVal.
@@ -86,9 +87,10 @@ case class chSess(sess : Connection, taskId: Int){
       val mvc = MaxValAndCnt(rs.getLong(1),rs.getLong(2))
       mvc
     }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
   } yield maxVal
 
-  def getMaxColForSync(table: Table): ZIO[Any,Throwable,Option[MaxValAndCnt]] = for {
+  def getMaxColForSync(table: Table): ZIO[Any,SQLException,Option[MaxValAndCnt]] = for {
     tblExistsCh <- isTableExistsCh(table)
       .when(table.sync_by_column_max.nonEmpty ||
         table.sync_update_by_column_max.nonEmpty ||
@@ -97,7 +99,7 @@ case class chSess(sess : Connection, taskId: Int){
     maxColCh <- getMaxValueByColCh(table).when(tblExistsCh.getOrElse(0)==1)
   } yield maxColCh
 
-  private def getSyncWhereFilterRsTuples(table: Table): ZIO[Any, Throwable, List[Any]] = for {
+  private def getSyncWhereFilterRsTuples(table: Table): ZIO[Any, SQLException, List[Any]] = for {
     res <- ZIO.attemptBlockingInterrupt {
       val q =
         s""" select distinct ${table.sync_by_columns.getOrElse(" CH_EMPTY_SYNC_COLUMNS ")}
@@ -126,18 +128,19 @@ case class chSess(sess : Connection, taskId: Int){
 
       filterTuples
     }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
   } yield res
 
-  def whereAppendInt1(table: Table): ZIO[Any, Throwable, Option[List[Int]]] = for {
+  def whereAppendInt1(table: Table): ZIO[Any, SQLException, Option[List[Int]]] = for {
     res <- getSyncWhereFilterRsTuples(table)
   } yield
     Some(res.map(_.asInstanceOf[Int]))
 
-  def whereAppendInt2(table: Table): ZIO[Any, Throwable, Option[List[(Int,Int)]]] = for {
+  def whereAppendInt2(table: Table): ZIO[Any, SQLException, Option[List[(Int,Int)]]] = for {
     res <- getSyncWhereFilterRsTuples(table)
   } yield Some(res.map(_.asInstanceOf[(Int,Int)]))
 
-  def whereAppendInt3(table: Table): ZIO[Any, Throwable, Option[List[(Int,Int,Int)]]] = for {
+  def whereAppendInt3(table: Table): ZIO[Any, SQLException, Option[List[(Int,Int,Int)]]] = for {
     res <- getSyncWhereFilterRsTuples(table)
   } yield  Some(res.map(_.asInstanceOf[(Int,Int,Int)]))
 
@@ -150,7 +153,7 @@ case class chSess(sess : Connection, taskId: Int){
    * where t.database='msk_arm_v2' and
    * t.name='evc'
   */
-  def getPkColumns(table: Table): ZIO[Any,Throwable,List[String]] = for {
+  def getPkColumns(table: Table): ZIO[Any, SQLException, List[String]] = for {
     pkString <- ZIO.attemptBlockingInterrupt {
       val rs = sess.createStatement.executeQuery(
         s"""
@@ -164,12 +167,13 @@ case class chSess(sess : Connection, taskId: Int){
       rs.close()
       pks
     }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
   } yield pkString.split(",") .toList
 
   /**
    * return count of copied rows.
    */
-  def getCountCopiedRows(table: Table): ZIO[Any, Exception, Long] = for {
+  def getCountCopiedRows(table: Table): ZIO[Any, SQLException, Long] = for {
     rows <- ZIO.attemptBlockingInterrupt {
       val rsRowCount = sess.createStatement.executeQuery(s"select count() as cnt from ${table.schema}.${table.name}")
       rsRowCount.next()
@@ -206,10 +210,10 @@ case class chSess(sess : Connection, taskId: Int){
   } yield ()
 
   def recreateTableCopyData(table: Table,
-                            rs: ZIO[Any, Throwable, ResultSet],
+                            rs: ZIO[Any, SQLException, ResultSet],
                             batch_size: Int,
                             maxValCnt: Option[MaxValAndCnt]
-                           ): ZIO[Any, Throwable, Long] =
+                           ): ZIO[Any, SQLException, Long] =
     for {
     _ <- ZIO.logInfo(s"recreateTableCopyData table : ${table.fullTableName()}")
     oraRs <- rs
@@ -257,6 +261,7 @@ case class chSess(sess : Connection, taskId: Int){
       sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
       sess.createStatement.executeQuery(createScript)
     }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
       .when(table.recreate==1)
 
     rows <- ZIO.attemptBlockingInterrupt{
@@ -307,9 +312,9 @@ case class chSess(sess : Connection, taskId: Int){
   } yield rows
 
   def recreateTableCopyDataForUpdate(table: Table,
-                                     rs: ZIO[Any, Throwable, ResultSet],
+                                     rs: ZIO[Any, SQLException, ResultSet],
                                      batch_size: Int,
-                                     pkColList: List[String]): ZIO[Any, Throwable, Long] =
+                                     pkColList: List[String]): ZIO[Any, SQLException, Long] =
     for {
       _ <- ZIO.logInfo(s"recreateTableCopyDataForUpdate table : ${table.fullTableName()}")
       oraRs <- rs
@@ -342,14 +347,15 @@ case class chSess(sess : Connection, taskId: Int){
            |input('$colsScript
            |      ')
            |""".stripMargin
-      //_ <- ZIO.logDebug(s"insQuer = $insertQuery")
+
       _ <- ZIO.attemptBlockingInterrupt {
         sess.createStatement.executeQuery(s"drop table if exists ${table.schema}.${table.name}")
         sess.createStatement.executeQuery(createScript)
         createScript
       }.tapBoth(er => ZIO.logError(er.getMessage),
         createScript => ZIO.logDebug(s"recreateTableCopyDataForUpdate createScript = $createScript")
-      )
+      ).refineToOrDie[SQLException]
+
       rowsWithQuery <- ZIO.attemptBlockingInterrupt {
         //------------------------------------
         val ps: PreparedStatement = sess.prepareStatement(insertQuery)
@@ -403,10 +409,11 @@ case class chSess(sess : Connection, taskId: Int){
         AppendRowsWQuery(rowCount, insertQuery)
       }.tapBoth(er => ZIO.logError(er.getMessage),
         rq => ZIO.logDebug(s"recreateTableCopyDataForUpdate insert = ${rq.query}"))
+        .refineToOrDie[SQLException]
      _ <- ZIO.logInfo(s"Copied ${rowsWithQuery.copied} rows.")
     } yield rowsWithQuery.copied
 
-  def createDatabases(schemas: Set[String]): ZIO[Any, Throwable, Unit] = for {
+  def createDatabases(schemas: Set[String]): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.unit
     _ <- ZIO.foreachDiscard(schemas) {
       schema =>
@@ -418,19 +425,20 @@ case class chSess(sess : Connection, taskId: Int){
         }.tapBoth(
           er => ZIO.logError(er.getMessage),
           createDb => ZIO.logDebug(s"createDatabases script = $createDb")
-        )
+        ).refineToOrDie[SQLException]
     }
   } yield ()
 
-  def truncateTable(meta: ViewQueryMeta): ZIO[Any, Throwable, Unit] = for {
+  def truncateTable(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt{
       val rs: ResultSet = sess.createStatement.
         executeQuery(s"truncate table ${meta.chSchema}.${meta.chTable}")
       rs.close()
     }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
   } yield ()
 
-  def getChTableResultSet(meta: ViewQueryMeta): ZIO[Any,Throwable,ResultSet] = for {
+  def getChTableResultSet(meta: ViewQueryMeta): ZIO[Any,SQLException,ResultSet] = for {
     rs <- ZIO.attemptBlockingInterrupt {
       val selectQuery: String = s"select * from ${meta.chSchema}.${meta.chTable}"
       println(s"getChTableResultSet selectQuery = $selectQuery")
@@ -438,10 +446,10 @@ case class chSess(sess : Connection, taskId: Int){
     }.tapBoth(
       er => ZIO.logError(er.getMessage),
       select => ZIO.logDebug(s"getChTableResultSet query = $select")
-    )
+    ).refineToOrDie[SQLException]
   } yield rs
 
-  def insertFromQuery(meta: ViewQueryMeta, calcParams: Set[CalcParams]): ZIO[Any, Throwable, Unit] = for {
+  def insertFromQuery(meta: ViewQueryMeta, calcParams: Set[CalcParams]): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
       val mapCalcParams: Map[String, String] = calcParams.iterator.map(p => p.name -> p.value).toMap
       val strQuery: String = meta.query.getOrElse(" ")
@@ -460,19 +468,20 @@ case class chSess(sess : Connection, taskId: Int){
     }.tapBoth(
       er => ZIO.logError(er.getMessage),
       query => ZIO.logDebug(s"insertFromQuery query = $query"))
+      .refineToOrDie[SQLException]
   } yield ()
 
 }
 
 trait jdbcChSession {
-  def sess(taskId: Int): ZIO[Any,Throwable,chSess]
+  def sess(taskId: Int): ZIO[Any,SQLException,chSess]
   val props = new Properties()
-  def chConnection(taskId: Int): ZIO[Any,Throwable,chSess]
+  def chConnection(taskId: Int): ZIO[Any,SQLException,chSess]
 }
 
 case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
 
-  def sess(taskId: Int): ZIO[Any, Throwable, chSess] = for {
+  def sess(taskId: Int): ZIO[Any, SQLException, chSess] = for {
     session <- chConnection(taskId)
     _ <- ZIO.logDebug("~~~~~~~~~~~~~~~ Clickhouse connect properties ~~~~~~~~~~~~~~~~")
     cnt = props.keySet().size()
@@ -483,27 +492,21 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
     _ <- ZIO.logDebug(s" = [${props.getProperty("")}]")
   } yield session
 
-  override def chConnection(taskId: Int): ZIO[Any, Throwable, chSess] = for {
+  override def chConnection(taskId: Int): ZIO[Any, SQLException, chSess] = for {
     _ <- ZIO.unit
     sess <- ZIO.attemptBlockingInterrupt {
       props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
-      /** Try different HTTP libraries:
-       * HTTP_CLIENT
-       * HTTP_URL_CONNECTION
-       * APACHE_HTTP_CLIENT
-      */
       val dataSource = new ClickHouseDataSource(ch.getUrl, props)
       val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
       chSess(conn,taskId)
-    }.tapError(er => ZIO.logError(er.getMessage))
-    _ <- ZIO.logDebug(s"New clickhouse connection =============== >>>>>>>>>>>>> ")
+    }.refineToOrDie[SQLException]
   } yield sess
 
 }
 
 object jdbcChSessionImpl {
 
-  val layer: ZLayer[ClickhouseServer, Exception, jdbcChSession] =
+  val layer: ZLayer[ClickhouseServer, SQLException, jdbcChSession] =
     ZLayer{
       for {
         chs <- ZIO.service[ClickhouseServer]
