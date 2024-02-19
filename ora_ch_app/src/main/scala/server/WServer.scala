@@ -250,8 +250,7 @@ object WServer {
          }.provide(
       OraConnRepoImpl.layer(reqCalc.servers.oracle),
       ZLayer.succeed(repo),
-      ZLayer.succeed(reqCalc.servers.oracle),
-      jdbcSessionImpl.layer,
+      ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
       ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
       ZLayer.succeed(SessCalc)
     ).forkDaemon

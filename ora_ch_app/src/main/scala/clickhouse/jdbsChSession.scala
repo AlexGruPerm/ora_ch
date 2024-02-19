@@ -422,6 +422,7 @@ case class chSess(sess : Connection, taskId: Int){
             s"CREATE DATABASE IF NOT EXISTS $schema"
           val rs: ResultSet = sess.createStatement.executeQuery(query)
           rs.next()
+          query
         }.tapBoth(
           er => ZIO.logError(er.getMessage),
           createDb => ZIO.logDebug(s"createDatabases script = $createDb")
@@ -483,13 +484,10 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
 
   def sess(taskId: Int): ZIO[Any, SQLException, chSess] = for {
     session <- chConnection(taskId)
-    _ <- ZIO.logDebug("~~~~~~~~~~~~~~~ Clickhouse connect properties ~~~~~~~~~~~~~~~~")
     cnt = props.keySet().size()
     _ <- ZIO.logDebug(s"Connection has $cnt properties")
     keys = props.keySet().toArray.map(_.toString).toList
     _ <- ZIO.foreachDiscard(keys)(k => ZIO.logDebug(s"$k - ${props.getProperty(k)}]"))
-    _ <- ZIO.logDebug("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    _ <- ZIO.logDebug(s" = [${props.getProperty("")}]")
   } yield session
 
   override def chConnection(taskId: Int): ZIO[Any, SQLException, chSess] = for {

@@ -22,27 +22,26 @@ trait TaskRepo {
 case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
 
   def create(task: WsTask): Task[TaskId] = for {
-    currStatus <- getState
     _ <- ref.update(_ => task)
-    _ <- ZIO.logDebug(s"repo state changed: ${currStatus.state} -> ${task.state.state}")
   } yield task.id
 
   def getTaskId: UIO[Int] = ref.get.map(_.id)
 
   def setState(newState: TaskState): UIO[Unit] = for {
     currStatus <- getState
-    _ <- ref.update(wst => wst.copy(state = newState))
-    taskId <- getTaskId
-    _ <- ZIO.logDebug(s"For taskId = $taskId REPO state ${currStatus.state} -> ${newState.state}")
+    _ <- ZIO.ifZIO(ZIO.succeed(currStatus == newState))(
+      ZIO.unit,
+      ref.update(wst => wst.copy(state = newState)).
+        zipLeft(getTaskId.flatMap(taskId =>
+          ZIO.logInfo(s"For taskId = $taskId REPO state: ${currStatus.state} -> ${newState.state}")))
+    )
   } yield ()
 
   def setTaskId(taskId: Int): UIO[Unit] = ref.update(wst => wst.copy(id = taskId))
 
-  def getState: UIO[TaskState] =
-    ref.get.map(_.state)
+  def getState: UIO[TaskState] = ref.get.map(_.state)
 
   def clearTask: UIO[Unit] = ref.update(_ => WsTask())
-
 }
 
 object ImplTaskRepo {

@@ -30,15 +30,17 @@ case class ImplCalcRepo(ref: Ref[ReqCalc]) extends CalcRepo {
 
   def setState(newState: CalcState): UIO[Unit] = for {
     currStatus <- getState
-    _ <- ref.update(wst => wst.copy(state = newState))
-    _ <- ZIO.logInfo(s"repo state changed: ${currStatus.state} -> ${newState.state}")
+    _ <- ZIO.ifZIO(ZIO.succeed(currStatus == newState))(
+      ZIO.unit,
+      ref.update(wst => wst.copy(state = newState)).
+        zipLeft(getCalcId.flatMap(calcID =>
+          ZIO.logInfo(s"For calcID = $calcID REPO state: ${currStatus.state} -> ${newState.state}")))
+    )
   } yield ()
 
-  def getState: UIO[CalcState] =
-    ref.get.map(_.state)
+  def getState: UIO[CalcState] = ref.get.map(_.state)
 
   def clearCalc: UIO[Unit] = ref.update(_ => ReqCalc())
-
 }
 
 object ImplCalcRepo {
