@@ -2,7 +2,7 @@ package task
 
 import common.TaskState
 import task.types.TaskId
-import zio.{Ref, Task, UIO, ZIO, ZLayer}
+import zio.{ Ref, Task, UIO, ZIO, ZLayer }
 
 import scala.collection.mutable
 
@@ -29,12 +29,18 @@ case class ImplTaskRepo(ref: Ref[WsTask]) extends TaskRepo {
 
   def setState(newState: TaskState): UIO[Unit] = for {
     currStatus <- getState
-    _ <- ZIO.ifZIO(ZIO.succeed(currStatus == newState))(
-      ZIO.unit,
-      ref.update(wst => wst.copy(state = newState)).
-        zipLeft(getTaskId.flatMap(taskId =>
-          ZIO.logInfo(s"For taskId = $taskId REPO state: ${currStatus.state} -> ${newState.state}")))
-    )
+    _          <- ZIO.ifZIO(ZIO.succeed(currStatus == newState))(
+                    ZIO.unit,
+                    ref
+                      .update(wst => wst.copy(state = newState))
+                      .zipLeft(
+                        getTaskId.flatMap(taskId =>
+                          ZIO.logInfo(
+                            s"For taskId = $taskId REPO state: ${currStatus.state} -> ${newState.state}"
+                          )
+                        )
+                      )
+                  )
   } yield ()
 
   def setTaskId(taskId: Int): UIO[Unit] = ref.update(wst => wst.copy(id = taskId))

@@ -1,7 +1,7 @@
 package calc
 
 import calc.types.CalcId
-import zio.{Ref, Task, UIO, ZIO, ZLayer}
+import zio.{ Ref, Task, UIO, ZIO, ZLayer }
 import common._
 import connrepo.OraConnRepoImpl
 
@@ -24,18 +24,24 @@ case class ImplCalcRepo(ref: Ref[ReqCalc]) extends CalcRepo {
     _ <- ref.update(_ => task)
   } yield task.id
 
-  def updateCalcId(calcId: Int): UIO[Unit] = ref.update(c => c.copy(id =calcId))
+  def updateCalcId(calcId: Int): UIO[Unit] = ref.update(c => c.copy(id = calcId))
 
   def getCalcId: UIO[Int] = ref.get.map(_.id)
 
   def setState(newState: CalcState): UIO[Unit] = for {
     currStatus <- getState
-    _ <- ZIO.ifZIO(ZIO.succeed(currStatus == newState))(
-      ZIO.unit,
-      ref.update(wst => wst.copy(state = newState)).
-        zipLeft(getCalcId.flatMap(calcID =>
-          ZIO.logInfo(s"For calcID = $calcID REPO state: ${currStatus.state} -> ${newState.state}")))
-    )
+    _          <- ZIO.ifZIO(ZIO.succeed(currStatus == newState))(
+                    ZIO.unit,
+                    ref
+                      .update(wst => wst.copy(state = newState))
+                      .zipLeft(
+                        getCalcId.flatMap(calcID =>
+                          ZIO.logInfo(
+                            s"For calcID = $calcID REPO state: ${currStatus.state} -> ${newState.state}"
+                          )
+                        )
+                      )
+                  )
   } yield ()
 
   def getState: UIO[CalcState] = ref.get.map(_.state)
@@ -45,9 +51,7 @@ case class ImplCalcRepo(ref: Ref[ReqCalc]) extends CalcRepo {
 
 object ImplCalcRepo {
   def layer: ZLayer[Any, Nothing, ImplCalcRepo] =
-      ZLayer.fromZIO(
-        Ref.make(ReqCalc()).map(r => ImplCalcRepo(r))
-      )
+    ZLayer.fromZIO(
+      Ref.make(ReqCalc()).map(r => ImplCalcRepo(r))
+    )
 }
-
-

@@ -3,8 +3,6 @@ name := "ora_ch_app"
 ThisBuild / organization := "yakushev"
 ThisBuild / version      := "0.0.13"
 ThisBuild / scalaVersion := "2.13.10"
-//https://gist.github.com/carlosedp/c65b80ac1c0ddecd266f49248916a3df
-// for in Scala 3.4 where tuples can be directly unpacked in the for comprehension.
 
   val Versions = new {
     val ch_http_client     = "0.5.0"
@@ -32,6 +30,7 @@ ThisBuild / scalaVersion := "2.13.10"
 
   lazy val ora_ch_app = (project in file("ora_ch_app"))
   .settings(
+    scalafmtOnCompile          := true,
     Compile / mainClass        := Some("app.MainApp"),
     Compile / unmanagedJars := (baseDirectory.value ** "*.jar").classpath,
     assembly / assemblyJarName := s"orach.jar",
