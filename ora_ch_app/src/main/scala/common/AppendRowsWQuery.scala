@@ -1,3 +1,3 @@
 package common
 
-case class AppendRowsWQuery(copied: Long,query: String)
+case class AppendRowsWQuery(copied: Long, query: String)

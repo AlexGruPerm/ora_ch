@@ -31,9 +31,7 @@ case class OraConnRepoImpl(conf: OraServer, ref: Ref[Connection]) extends OraCon
 object OraConnRepoImpl {
 
   private def acquire(conf: OraServer): ZIO[Any, Exception, Connection] = for {
-    _          <- ZIO.logInfo(
-                    s"OraConnRepoImpl.acquire CREATE NEW ORACLE CONNECTION >>>>>>>>>>>>>>>>>>>>>>>>>>>>"
-                  )
+    _          <- ZIO.logInfo("new oracle connection")
     connection <- ZIO.attemptBlockingInterrupt {
                     DriverManager.registerDriver(new OracleDriver())
                     val props = new Properties()

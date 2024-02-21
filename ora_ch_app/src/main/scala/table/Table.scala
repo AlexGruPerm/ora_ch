@@ -5,29 +5,30 @@ import common.Types.OptString
 /**
  * Table or view
  */
-case class Table(schema: String,
-                 recreate: Int = 0,
-                 name: String,
-                 curr_date_context:         OptString,
-                 analyt_datecalc:           OptString,
-                 pk_columns:                String,
-                 only_columns:              OptString,
-                 ins_select_order_by:       OptString,
-                 partition_by:              OptString,
-                 notnull_columns:           OptString,
-                 where_filter:              OptString,
-                 sync_by_column_max:        OptString,
-                 update_fields:             OptString,
-                 sync_by_columns:           OptString,
-                 sync_update_by_column_max: OptString
-                ){
+case class Table(
+  schema: String,
+  recreate: Int = 0,
+  name: String,
+  curr_date_context: OptString,
+  analyt_datecalc: OptString,
+  pk_columns: String,
+  only_columns: OptString,
+  ins_select_order_by: OptString,
+  partition_by: OptString,
+  notnull_columns: OptString,
+  where_filter: OptString,
+  sync_by_column_max: OptString,
+  update_fields: OptString,
+  sync_by_columns: OptString,
+  sync_update_by_column_max: OptString
+) {
 
   println(s"Table constr: $pk_columns - $only_columns - $notnull_columns")
 
   def syncArity(): Int =
     sync_by_columns match {
       case Some(syncFields) => syncFields.split(",").length
-      case None => 0
+      case None             => 0
     }
 
   def fullTableName(): String =
@@ -39,23 +40,23 @@ case class Table(schema: String,
   def whereFilter(): String =
     where_filter match {
       case Some(filter) => s" where $filter"
-      case None => " "
+      case None         => " "
     }
 
   def orderBy(): String =
     ins_select_order_by match {
       case Some(order) => s" order by $order"
-      case None => " "
+      case None        => " "
     }
 
   def finishStatus(): String =
     sync_by_column_max match {
       case Some(_) => "finished_append"
-      case None =>
+      case None    =>
         update_fields match {
-        case Some(_) => "finished_update"
-        case None => "finished"
-      }
+          case Some(_) => "finished_update"
+          case None    => "finished"
+        }
     }
 
 }

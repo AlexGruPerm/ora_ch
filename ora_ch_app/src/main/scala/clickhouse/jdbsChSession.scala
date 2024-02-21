@@ -191,7 +191,7 @@ case class chSess(sess: Connection, taskId: Int) {
   /**
    * return count of copied rows.
    */
-  def getCountCopiedRows(table: Table): ZIO[Any, SQLException, Long] = for {
+  def getCountCopiedRows(table: Table): ZIO[Any, Nothing, Long] = for {
     rows <- ZIO.attemptBlockingInterrupt {
               val rsRowCount = sess
                 .createStatement
@@ -199,7 +199,7 @@ case class chSess(sess: Connection, taskId: Int) {
               rsRowCount.next()
               val rowCount   = rsRowCount.getLong(1)
               rowCount
-            }.refineToOrDie[SQLException]
+            }.refineToOrDie[SQLException] orElse ZIO.succeed(0L)
   } yield rows
 
   def getCountCopiedRowsFUpd(table: Table): ZIO[Any, Nothing, Long] = for {
@@ -213,8 +213,7 @@ case class chSess(sess: Connection, taskId: Int) {
               rsRowCount.next()
               val rowCount   = rsRowCount.getLong(1)
               rowCount
-            }.tapError(er => ZIO.logError(er.getMessage))
-              .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
+            }.refineToOrDie[SQLException] orElse ZIO.succeed(0L)
   } yield rows
 
   private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
