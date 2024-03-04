@@ -7,7 +7,7 @@ import common.Types.MaxValAndCnt
 import conf.OraServer
 import error.ResponseMessage
 import ora.{ jdbcSession, jdbcSessionImpl, oraSessTask }
-import request.{ ReqNewTask, SrcTable }
+import request.{ Parallel, ReqNewTask, SrcTable }
 import task.{ ImplTaskRepo, WsTask }
 import zio._
 import zio.http._
@@ -57,18 +57,20 @@ object WServer {
       _    <- sess.setTaskError(errorMsg, table)
       _    <- updateFiber.interrupt
       repo <- ZIO.service[ImplTaskRepo]
-      _    <- ZIO.logInfo(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
+      _    <- ZIO.logError(s"Error for table [${table.fullTableName()}] - $errorMsg")
       _    <- repo.setState(TaskState(Wait))
       _    <- repo.clearTask
     } yield ()
 
   private def copyTableEffect(
+    taskId: Int,
     sess: oraSessTask,
     sessCh: chSess,
     table: Table,
     fetch_size: Int,
     batch_size: Int
   ): ZIO[ImplTaskRepo, Throwable, Long] = for {
+    _            <- ZIO.logInfo(s"Begin copyTableEffect for ${table.name}")
     _            <- sess.setTableBeginCopy(table)
     maxValAndCnt <- sessCh.getMaxColForSync(table)
     _            <- ZIO.logDebug(s"maxValAndCnt = $maxValAndCnt")
@@ -89,7 +91,7 @@ object WServer {
       ZIO.logDebug(
         s"syncColMax = ${table.sync_by_column_max} syncUpdateColMax = ${table.sync_update_by_column_max}"
       )
-    rs            = sess.getDataResultSet(table, fetch_size, maxValAndCnt, appendKeys)
+    rs            = sess.getDataResultSet(taskId, table, fetch_size, maxValAndCnt, appendKeys)
     rowCount     <- sessCh
                       .recreateTableCopyData(table, rs, batch_size, maxValAndCnt)
                       .tapError(er =>
@@ -98,7 +100,12 @@ object WServer {
                           saveError(sess, er.getMessage, fiberUpdCnt, table)
                       )
                       .refineToOrDie[SQLException]
+    _            <- fiberUpdCnt.interrupt
     _            <- sess.setTableCopied(table, rowCount, table.finishStatus())
+    _            <-
+      ZIO.logInfo(
+        s"taskId=[$taskId] copyTableEffect Finished for table = ${table.name} with rowsCount = $rowCount"
+      )
   } yield rowCount
 
   private def updateTableColumns(
@@ -130,6 +137,16 @@ object WServer {
             }
       }
 
+  private def closeSession(s: oraSessTask, table: Table): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt {
+           s.sess.commit()
+           s.sess.close()
+         }.refineToOrDie[SQLException]
+           .tapError(er =>
+             ZIO.logError(s"closeSession [${table.fullTableName()}] error: ${er.getMessage}")
+           )
+  } yield ()
+
   private def startTask(
     newtask: ReqNewTask
   ): ZIO[ImplTaskRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
@@ -137,7 +154,7 @@ object WServer {
     oraSess    <- ZIO.service[jdbcSession]
     repo       <- ZIO.service[ImplTaskRepo]
     jdbcCh     <- ZIO.service[jdbcChSession]
-    sess       <- oraSess.sessTask("startTask")
+    sess       <- oraSess.sessTask()
     taskId     <- sess.getTaskIdFromSess
     _          <- repo.setTaskId(taskId)
     t          <- sess.getTables(newtask.schemas)
@@ -146,7 +163,9 @@ object WServer {
                     state = TaskState(Ready, Option.empty[Table]),
                     oraServer = Some(newtask.servers.oracle),
                     clickhouseServer = Some(newtask.servers.clickhouse),
-                    tables = t
+                    parallel = newtask.parallel,
+                    tables = t,
+                    newtask.parallel.degree
                   )
     _          <- repo.create(wstask)
     _          <- repo.setState(TaskState(Executing))
@@ -162,22 +181,30 @@ object WServer {
     fetch_size  = task.oraServer.map(_.fetch_size).getOrElse(1000)
     batch_size  = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
     copyEffects = task.tables.map { table =>
-                    ZIO
-                      .ifZIO(ZIO.succeed(table.sync_update_by_column_max.nonEmpty))(
-                        copyTableEffect(sess, sessCh, table, fetch_size, batch_size) *>
-                          updateTableColumns(sess, sessCh, table, fetch_size, batch_size),
-                        ZIO.ifZIO(ZIO.succeed(table.update_fields.nonEmpty))(
-                          updateTableColumns(sess, sessCh, table, fetch_size, batch_size),
-                          copyTableEffect(sess, sessCh, table, fetch_size, batch_size)
-                        )
+                    oraSess.sessTask(Some(taskId)).flatMap { s =>
+                      (
+                        if (table.sync_update_by_column_max.nonEmpty)
+                          copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size) *>
+                            updateTableColumns(s, sessCh, table, fetch_size, batch_size)
+                        else if (table.update_fields.nonEmpty)
+                          updateTableColumns(s, sessCh, table, fetch_size, batch_size)
+                        else
+                          copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
                       )
-                      .refineToOrDie[SQLException]
-                      .zipLeft(repo.setState(TaskState(Wait)))
+                        .refineToOrDie[SQLException] *>
+                        closeSession(s, table)
+                    }
                   }
-    _          <- ZIO.collectAll(copyEffects)
-    _          <- repo.setState(TaskState(Wait))
-    _          <- repo.clearTask
-    _          <- sess.taskFinished
+    _          <- if (wstask.parDegree <= 2)
+                    ZIO.logInfo(s"copyEffects sequentially with parDegree = ${wstask.parDegree}") *>
+                      ZIO.collectAll(copyEffects)
+                  else
+                    ZIO.logInfo(s"copyEffects IN PARALLEL with parDegree = ${wstask.parDegree}") *>
+                      ZIO.collectAllPar(copyEffects).withParallelism(wstask.parDegree - 1)
+
+    _ <- repo.setState(TaskState(Wait))
+    _ <- repo.clearTask
+    _ <- sess.taskFinished
   } yield ()
 
   private def requestToEntity[A](
@@ -232,7 +259,8 @@ object WServer {
    * db when fiber fail or die. This catcher take this error and save it into db.
    */
   private def errorCatcherForkedTask(
-    taskFiber: Fiber.Runtime[Throwable, Unit]
+    taskEffect: ZIO[Any, Throwable, Unit]
+    // taskFiber: Fiber.Runtime[Throwable, Unit]
   ): ZIO[Any, Throwable, Unit] = for {
     fn        <- ZIO.fiberId.map(_.threadName)
     _         <- ZIO.logDebug(s"Error catcher started on $fn")
@@ -241,6 +269,7 @@ object WServer {
      * succeeds with Exit information, even if the fiber fails or is interrupted. In contrast to
      * that, join on a fiber that fails will itself fail with the same error as the fiber
      */
+    taskFiber <- taskEffect.fork
     exitValue <- taskFiber.await
     _         <- exitValue match {
                    case Exit.Success(value) =>
@@ -249,6 +278,7 @@ object WServer {
                      ZIO.logError(s"**** Fiber failed ****") *>
                        ZIO.logError(s"${cause.prettyPrint}")
                  }
+    _         <- taskFiber.interrupt
   } yield ()
 
   private def task(
@@ -262,26 +292,35 @@ object WServer {
                     for {
                       repo            <- ZIO.service[ImplTaskRepo]
                       _               <- currStatusCheckerTask()
-                      layerOraConnRepo = OraConnRepoImpl.layer(newTask.servers.oracle)
-                      taskFiber       <- startTask(newTask)
+                      layerOraConnRepo =
+                        OraConnRepoImpl.layer(newTask.servers.oracle, newTask.parallel)
+                      taskEffect       = startTask(newTask)
                                            .provide(
                                              layerOraConnRepo,
                                              ZLayer.succeed(repo),
-                                             ZLayer.succeed(newTask.servers.oracle) >>> jdbcSessionImpl.layer,
-                                             ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer,
+                                             ZLayer.succeed(
+                                               newTask.servers.oracle
+                                             ) >>> jdbcSessionImpl.layer,
+                                             ZLayer.succeed(
+                                               newTask.servers.clickhouse
+                                             ) >>> jdbcChSessionImpl.layer,
                                              ZLayer.succeed(SessCalc)
                                            )
-                                           .forkDaemon
-                      _               <- errorCatcherForkedTask(taskFiber).forkDaemon
+                      _               <- errorCatcherForkedTask(taskEffect).forkDaemon
                       schedule         = Schedule.spaced(250.millisecond) && Schedule.recurs(waitSeconds)
-                      taskId          <- repo.getTaskId
-                                        .filterOrFail(_ != 0)(0.toString)
-                                        .retryOrElse(schedule, (_: String, _: (Long, Long)) =>
-                                            ZIO.fail(
-                                              new Exception(
-                                                s"Elapsed wait time $waitSeconds seconds of getting taskId")
-                                            )
-                                        )
+                      taskId          <-
+                        repo
+                          .getTaskId
+                          .filterOrFail(_ != 0)(0.toString)
+                          .retryOrElse(
+                            schedule,
+                            (_: String, _: (Long, Long)) =>
+                              ZIO.fail(
+                                new Exception(
+                                  s"Elapsed wait time $waitSeconds seconds of getting taskId"
+                                )
+                              )
+                          )
                     } yield Response.json(s"""{"taskid": "$taskId"}""").status(Status.Ok)
                 }
   } yield response
@@ -301,7 +340,7 @@ object WServer {
                   addOnInterr(CalcLogic.copyDataChOra(reqCalc, meta), "copy")
               }
                 .provide(
-                  OraConnRepoImpl.layer(reqCalc.servers.oracle),
+                  OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel()),
                   ZLayer.succeed(repo),
                   ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
                   ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,

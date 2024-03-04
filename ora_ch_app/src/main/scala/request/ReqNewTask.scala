@@ -49,14 +49,25 @@ case class SrcTable(schema: String, tables: List[OneTable])
 
 case class Servers(oracle: OraServer, clickhouse: ClickhouseServer)
 
-case class ReqNewTask(servers: Servers, schemas: List[SrcTable] = List.empty[SrcTable]) {
+case class Parallel(degree: Int = 2/*4*/)
+
+case class ReqNewTask(servers: Servers, parallel: Parallel = Parallel(), schemas: List[SrcTable] = List.empty[SrcTable]) {
   if (schemas.exists(st => st.tables.isEmpty))
     throw new Exception(
       s"tables array is empty for schema ${schemas.find(st => st.tables.isEmpty).map(s => s.schema)}"
     )
+
+  if (parallel.degree < 2 || parallel.degree > 12)
+    throw new Exception(
+      s"parallel.degree = ${parallel.degree} must be between 2 and 12. Or without this key."
+    )
+
 }
 
 object EncDecReqNewTaskImplicits {
+
+  implicit val encoderParallel: JsonEncoder[Parallel] = DeriveJsonEncoder.gen[Parallel]
+  implicit val decoderParallel: JsonDecoder[Parallel] = DeriveJsonDecoder.gen[Parallel]
 
   implicit val encoderOneTable: JsonEncoder[OneTable] = DeriveJsonEncoder.gen[OneTable]
   implicit val decoderOneTable: JsonDecoder[OneTable] = DeriveJsonDecoder.gen[OneTable]

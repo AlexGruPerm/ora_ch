@@ -1,7 +1,8 @@
 package task
 
-import common.{ TaskState, Wait }
-import conf.{ ClickhouseServer, OraServer }
+import common.{TaskState, Wait}
+import conf.{ClickhouseServer, OraServer}
+import request.Parallel
 import table.Table
 
 case class WsTask(
@@ -9,5 +10,7 @@ case class WsTask(
   state: TaskState = TaskState(Wait, Option.empty[Table]),
   oraServer: Option[OraServer] = Option.empty[OraServer],
   clickhouseServer: Option[ClickhouseServer] = Option.empty[ClickhouseServer],
-  tables: List[Table] = List.empty[Table]
+  parallel: Parallel = Parallel(),
+  tables: List[Table] = List.empty[Table],
+  parDegree: Int = 2
 )

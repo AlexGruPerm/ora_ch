@@ -25,7 +25,6 @@ import connrepo.OraConnRepoImpl
 
 sealed trait oraSess {
   def sess: Connection
-  // def closeConnection: ZIO[Any, Nothing, Unit]
   def getPid: Int = {
     val stmt: Statement     = sess.createStatement
     val rs: ResultSet       = stmt.executeQuery("select sys_context('USERENV','SID') as sid from dual")
@@ -37,7 +36,7 @@ sealed trait oraSess {
 }
 
 case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
-
+  /**/
   def insertViewQueryLog(idVq: Int): ZIO[Any, SQLException, Int] = for {
     id <- ZIO.attemptBlockingInterrupt {
             val query: String        =
@@ -316,22 +315,43 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
   }
 
   def getDataResultSet(
+    taskId: Int,
     table: Table,
     fetch_size: Int,
     maxColCh: Option[MaxValAndCnt],
     appendKeys: Option[List[Any]] = Option.empty[List[Any]]
   ): ZIO[Any, SQLException, ResultSet] = for {
+    sid <- ZIO.attemptBlockingInterrupt {
+             getPid
+           }.tapError(er => ZIO.logError(er.getMessage))
+             .refineToOrDie[SQLException]
+
+    _ <-
+      ZIO.attemptBlockingInterrupt {
+        val query: String =
+          s""" update ora_to_ch_tasks_tables t
+             |   set  ora_sid      = $sid
+             | where t.id_task     = $taskId and
+             |       t.schema_name = '${table.schema}' and
+             |       t.table_name  = '${table.name}' """.stripMargin
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        sess.setClientInfo("OCSID.MODULE", "ORATOCH")
+        sess.setClientInfo("OCSID.ACTION", s"SLAVE_$sid")
+        sess.commit()
+        rs.close()
+      }.tapError(er => ZIO.logError(er.getMessage))
+        .refineToOrDie[SQLException]
+
     _           <-
       ZIO.logDebug(
-        s"recreateTableCopyData arity = ${table.syncArity()} appendKeys.nonEmpty = ${appendKeys.nonEmpty}"
+        s"recreateTableCopyData sid=$sid arity = ${table.syncArity()} appendKeys.nonEmpty = ${appendKeys.nonEmpty}"
       )
     _           <-
       ZIO.logInfo(s"getDataResultSet maxColCh.CntRows = ${maxColCh.map(_.CntRows).getOrElse(0L)}")
     rsWithQuery <- ZIO.attemptBlockingInterrupt {
                      val whereByFields: String = getAppendByFieldsPart(table, appendKeys)
                      val dataQuery             =
-                       s"""
-            select /*+ ALL_ROWS */ ${table
+                       s""" select /*+ ALL_ROWS */ ${table
                            .only_columns
                            .getOrElse("*")} from ${table.schema}.${table.name} ${(
                            table.where_filter,
@@ -349,9 +369,8 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                          }}
           ${table.ins_select_order_by.map(order => s" order by $order ").getOrElse(" ")}
         """.stripMargin
-
                      setContext(table)
-                     val dataRs = sess
+                     val dataRs                = sess
                        .createStatement(
                          java.sql.ResultSet.TYPE_FORWARD_ONLY,
                          ResultSet.CONCUR_READ_ONLY
@@ -456,16 +475,23 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
 
   def setTableBeginCopy(table: Table): ZIO[Any, SQLException, Unit] = for {
     taskId <- getTaskIdFromSess
+    sid    <- ZIO.attemptBlockingInterrupt {
+                getPid
+              }.tapError(er => ZIO.logError(er.getMessage))
+                .refineToOrDie[SQLException]
     _      <-
       ZIO.attemptBlockingInterrupt {
         val query: String =
           s""" update ora_to_ch_tasks_tables t
              |   set  begin_datetime = sysdate,
-             |        state  = 'copying'
+             |        state          = 'copying',
+             |        ora_sid        = $sid
              | where t.id_task     = $taskId and
              |       t.schema_name = '${table.schema}' and
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
+        sess.setClientInfo("OCSID.MODULE", "ORATOCH")
+        sess.setClientInfo("OCSID.ACTION", s"SLAVE_$sid")
         sess.commit()
         rs.close()
       }.tapError(er => ZIO.logError(er.getMessage))
@@ -473,7 +499,8 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
   } yield ()
 
   def updateCountCopiedRows(table: Table, rowCount: Long): ZIO[Any, Nothing, Long] = for {
-    taskId <- getTaskIdFromSess // orElse ZIO.succeed(0)
+    taskId <- getTaskIdFromSess
+    //_ <- ZIO.logInfo(s"updateCountCopiedRows ${table.fullTableName()} taskId=$taskId rowCount=$rowCount")
     rows   <-
       ZIO.attemptBlockingInterrupt {
         val query: String =
@@ -517,7 +544,6 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
           sess.commit()
           rs.close()
         }.refineToOrDie[SQLException]
-      // .tapError(er => ZIO.logError(er.getMessage))
     } yield ()
 
   def taskFinished: ZIO[Any, SQLException, Unit] = for {
@@ -528,7 +554,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                 val rs: ResultSet = sess.createStatement.executeQuery(query)
                 sess.commit()
                 rs.close()
-              }.tapError(er => ZIO.logError(er.getMessage))
+              }.tapError(er => ZIO.logError(s"Error in taskFinished - ${er.getMessage}"))
                 .refineToOrDie[SQLException]
   } yield ()
 
@@ -564,8 +590,10 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
 }
 
 trait jdbcSession {
-  def sessTask(debugMsg: String): ZIO[Any, SQLException, oraSessTask]
+  def sessTask(taskIdOpt: Option[Int] = Option.empty): ZIO[Any, SQLException, oraSessTask]
+  def closePool: ZIO[Any, SQLException, Unit]
   def sessCalc(vqId: Int = 0, debugMsg: String): ZIO[Any, SQLException, oraSessCalc]
+  def renamePool(name: String): ZIO[Any, SQLException, Unit]
   val props = new Properties()
 }
 
@@ -575,23 +603,54 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
   println(s"###### This is a jdbcSessionImpl main constructor sessType = $sessType  ########")
   println(" ")
 
-  def sessTask(debugMsg: String): ZIO[Any, SQLException, oraSessTask] = for {
-    _       <- ZIO.logInfo(s"[sessTask] jdbcSessionImpl.sess [$debugMsg] call oraConnectionTask")
-    session <- oraConnectionTask()
+  def sessTask(taskIdOpt: Option[Int] = Option.empty): ZIO[Any, SQLException, oraSessTask] = for {
+    _       <- ZIO.logInfo(
+                 s"[sessTask] jdbcSessionImpl.sess [${taskIdOpt.getOrElse(0)}] call oraConnectionTask"
+               )
+    session <- if (taskIdOpt.getOrElse(0) == 0)
+                 oraConnectionTask()
+               else
+                 oraConnectionTaskEx(taskIdOpt)
   } yield session
+
+  def closePool: ZIO[Any, SQLException, Unit] = for {
+    _ <- oraRef.closeAll
+  } yield ()
+
+  def renamePool(name: String): ZIO[Any, SQLException, Unit] = for {
+    _ <- oraRef.setConnectionPoolName(name)
+  } yield ()
 
   def sessCalc(vqId: Int, debugMsg: String): ZIO[Any, SQLException, oraSessCalc] = for {
     _       <- ZIO.logInfo(s"[sessCalc] jdbcSessionImpl.sess [$debugMsg] call oraConnectionCalc")
     session <- oraConnectionCalc(vqId)
   } yield session
 
+  /**
+   * When task executing now and taskId known.
+   */
+  private def oraConnectionTaskEx(taskIdOpt: Option[Int]): ZIO[Any, SQLException, oraSessTask] = for {
+    oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
+    sessEffect = ZIO.attemptBlockingInterrupt {
+                   oraConn.setAutoCommit(false)
+                   oraConn.setClientInfo("OCSID.MODULE", "ORATOCH")
+                   oraConn.setClientInfo("OCSID.ACTION", "SLAVE_INIT")
+                   oraSessTask(oraConn, taskIdOpt.getOrElse(0))
+                 }.tapError(er => ZIO.logError(er.getMessage))
+                   .refineToOrDie[SQLException]
+    sess      <- sessEffect
+  } yield sess
+
+  /**
+   * When new task created.
+   */
   private def oraConnectionTask(): ZIO[Any, SQLException, oraSessTask] = for {
-    _         <- ZIO.unit
     oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
     sessEffect = ZIO.attemptBlockingInterrupt {
                    val conn                 = oraConn
                    conn.setAutoCommit(false)
                    conn.setClientInfo("OCSID.MODULE", "ORATOCH")
+                   // todo: remove inserting ora_sid in parallel mode, or remove this filed into ora_to_ch_tasks_tables
                    val query: String        =
                      "insert into ora_to_ch_tasks (id,ora_sid) values (s_ora_to_ch_tasks.nextval,sys_context('USERENV','SID'))"
                    val idCol: Array[String] = Array("ID")
