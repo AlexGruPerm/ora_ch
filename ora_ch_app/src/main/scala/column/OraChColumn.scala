@@ -48,7 +48,7 @@ object OraChColumn {
       typeName match {
         case "NUMBER"   =>
           scale match {
-            case 0 => "UInt64"
+            case 0 => "Int64" // UInt64
             case _ => "Decimal128(6)"
           }
         case "VARCHAR2" => "String"

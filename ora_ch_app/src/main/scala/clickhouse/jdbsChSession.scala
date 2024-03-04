@@ -291,11 +291,25 @@ case class chSess(sess: Connection, taskId: Int) {
                 Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) { case (counter, rs) =>
                   cols.foldLeft(1) { case (i, c) =>
                     (c.typeName, c.scale) match {
-                      // Long - because getInt is that 4294967298 is outside the range of Java's int
-                      case ("NUMBER", 0)   => ps.setLong(i, rs.getLong(c.name))
-                      case ("NUMBER", _)   => ps.setDouble(i, rs.getDouble(c.name))
+                      case ("NUMBER", 0)   =>
+                        val l = rs.getLong(c.name)
+                        if (rs.wasNull())
+                          ps.setNull(i, Types.BIGINT)
+                        else
+                          ps.setLong(i, l)
+                      case ("NUMBER", _)   =>
+                        val n = rs.getDouble(c.name)
+                        if (rs.wasNull())
+                          ps.setNull(i, Types.DOUBLE)
+                        else
+                          ps.setDouble(i, n)
                       case ("CLOB", _)     => ps.setString(i, rs.getString(c.name))
-                      case ("VARCHAR2", _) => ps.setString(i, rs.getString(c.name))
+                      case ("VARCHAR2", _) =>
+                        val s: String = rs.getString(c.name)
+                        if (rs.wasNull())
+                          ps.setNull(i, Types.VARCHAR)
+                        else
+                          ps.setString(i, s)
                       case ("DATE", _)     =>
                         val tmp             = rs.getString(c.name)
                         val isNull: Boolean = rs.wasNull()
