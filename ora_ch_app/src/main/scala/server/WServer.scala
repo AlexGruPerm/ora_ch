@@ -267,21 +267,30 @@ object WServer {
                                            .provide(
                                              layerOraConnRepo,
                                              ZLayer.succeed(repo),
-                                             ZLayer.succeed(newTask.servers.oracle) >>> jdbcSessionImpl.layer,
-                                             ZLayer.succeed(newTask.servers.clickhouse) >>> jdbcChSessionImpl.layer,
+                                             ZLayer.succeed(
+                                               newTask.servers.oracle
+                                             ) >>> jdbcSessionImpl.layer,
+                                             ZLayer.succeed(
+                                               newTask.servers.clickhouse
+                                             ) >>> jdbcChSessionImpl.layer,
                                              ZLayer.succeed(SessCalc)
                                            )
                                            .forkDaemon
                       _               <- errorCatcherForkedTask(taskFiber).forkDaemon
                       schedule         = Schedule.spaced(250.millisecond) && Schedule.recurs(waitSeconds)
-                      taskId          <- repo.getTaskId
-                                        .filterOrFail(_ != 0)(0.toString)
-                                        .retryOrElse(schedule, (_: String, _: (Long, Long)) =>
-                                            ZIO.fail(
-                                              new Exception(
-                                                s"Elapsed wait time $waitSeconds seconds of getting taskId")
-                                            )
-                                        )
+                      taskId          <-
+                        repo
+                          .getTaskId
+                          .filterOrFail(_ != 0)(0.toString)
+                          .retryOrElse(
+                            schedule,
+                            (_: String, _: (Long, Long)) =>
+                              ZIO.fail(
+                                new Exception(
+                                  s"Elapsed wait time $waitSeconds seconds of getting taskId"
+                                )
+                              )
+                          )
                     } yield Response.json(s"""{"taskid": "$taskId"}""").status(Status.Ok)
                 }
   } yield response
