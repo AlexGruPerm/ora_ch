@@ -49,9 +49,13 @@ case class SrcTable(schema: String, tables: List[OneTable])
 
 case class Servers(oracle: OraServer, clickhouse: ClickhouseServer)
 
-case class Parallel(degree: Int = 2/*4*/)
+case class Parallel(degree: Int = 2 /*4*/ )
 
-case class ReqNewTask(servers: Servers, parallel: Parallel = Parallel(), schemas: List[SrcTable] = List.empty[SrcTable]) {
+case class ReqNewTask(
+  servers: Servers,
+  parallel: Parallel = Parallel(),
+  schemas: List[SrcTable] = List.empty[SrcTable]
+) {
   if (schemas.exists(st => st.tables.isEmpty))
     throw new Exception(
       s"tables array is empty for schema ${schemas.find(st => st.tables.isEmpty).map(s => s.schema)}"

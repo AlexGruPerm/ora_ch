@@ -500,7 +500,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
 
   def updateCountCopiedRows(table: Table, rowCount: Long): ZIO[Any, Nothing, Long] = for {
     taskId <- getTaskIdFromSess
-    //_ <- ZIO.logInfo(s"updateCountCopiedRows ${table.fullTableName()} taskId=$taskId rowCount=$rowCount")
+    // _ <- ZIO.logInfo(s"updateCountCopiedRows ${table.fullTableName()} taskId=$taskId rowCount=$rowCount")
     rows   <-
       ZIO.attemptBlockingInterrupt {
         val query: String =
@@ -629,17 +629,18 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
   /**
    * When task executing now and taskId known.
    */
-  private def oraConnectionTaskEx(taskIdOpt: Option[Int]): ZIO[Any, SQLException, oraSessTask] = for {
-    oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
-    sessEffect = ZIO.attemptBlockingInterrupt {
-                   oraConn.setAutoCommit(false)
-                   oraConn.setClientInfo("OCSID.MODULE", "ORATOCH")
-                   oraConn.setClientInfo("OCSID.ACTION", "SLAVE_INIT")
-                   oraSessTask(oraConn, taskIdOpt.getOrElse(0))
-                 }.tapError(er => ZIO.logError(er.getMessage))
-                   .refineToOrDie[SQLException]
-    sess      <- sessEffect
-  } yield sess
+  private def oraConnectionTaskEx(taskIdOpt: Option[Int]): ZIO[Any, SQLException, oraSessTask] =
+    for {
+      oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
+      sessEffect = ZIO.attemptBlockingInterrupt {
+                     oraConn.setAutoCommit(false)
+                     oraConn.setClientInfo("OCSID.MODULE", "ORATOCH")
+                     oraConn.setClientInfo("OCSID.ACTION", "SLAVE_INIT")
+                     oraSessTask(oraConn, taskIdOpt.getOrElse(0))
+                   }.tapError(er => ZIO.logError(er.getMessage))
+                     .refineToOrDie[SQLException]
+      sess      <- sessEffect
+    } yield sess
 
   /**
    * When new task created.

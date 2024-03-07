@@ -1,8 +1,8 @@
 package cpool
 
 import conf.OraServer
-import oracle.ucp.admin.{UniversalConnectionPoolManager, UniversalConnectionPoolManagerImpl}
-import oracle.ucp.jdbc.{PoolDataSourceFactory, ValidConnection}
+import oracle.ucp.admin.{ UniversalConnectionPoolManager, UniversalConnectionPoolManagerImpl }
+import oracle.ucp.jdbc.{ PoolDataSourceFactory, ValidConnection }
 import request.Parallel
 
 /**
@@ -29,7 +29,7 @@ class OraConnectionPool(conf: OraServer, par: Parallel) {
   pool.setInactiveConnectionTimeout(Integer.MAX_VALUE /*props.InactiveConnectionTimeout*/ )
   // todo: check it.
   // https://docs.oracle.com/en/database/oracle/oracle-database/12.2/jjucp/validating-ucp-connections.html#GUID-A7C850D6-4026-4629-BCFA-9181C29EFBF9
-  //pool.setValidateConnectionOnBorrow(true)
+  // pool.setValidateConnectionOnBorrow(true)
 
   val jdbcVersion: String = {
     val conn: java.sql.Connection     = pool.getConnection
@@ -41,10 +41,11 @@ class OraConnectionPool(conf: OraServer, par: Parallel) {
   }
 
   def closePoolConnections: Unit = {
-    //println(s"closePoolConnections pool.getAvailableConnectionsCount = ${pool.getAvailableConnectionsCount} ")
-    //println(s"closePoolConnections pool.getBorrowedConnectionsCount  = ${pool.getBorrowedConnectionsCount} ")
-    val mgr: UniversalConnectionPoolManager = UniversalConnectionPoolManagerImpl.getUniversalConnectionPoolManager
-    //mgr.stopConnectionPool("Ucp")
+    // println(s"closePoolConnections pool.getAvailableConnectionsCount = ${pool.getAvailableConnectionsCount} ")
+    // println(s"closePoolConnections pool.getBorrowedConnectionsCount  = ${pool.getBorrowedConnectionsCount} ")
+    val mgr: UniversalConnectionPoolManager =
+      UniversalConnectionPoolManagerImpl.getUniversalConnectionPoolManager
+    // mgr.stopConnectionPool("Ucp")
     (1 to pool.getAvailableConnectionsCount + pool.getBorrowedConnectionsCount).foreach { _ =>
       val c = pool.getConnection()
       c.asInstanceOf[ValidConnection].setInvalid()

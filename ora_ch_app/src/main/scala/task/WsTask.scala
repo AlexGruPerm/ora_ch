@@ -1,7 +1,7 @@
 package task
 
-import common.{TaskState, Wait}
-import conf.{ClickhouseServer, OraServer}
+import common.{ TaskState, Wait }
+import conf.{ ClickhouseServer, OraServer }
 import request.Parallel
 import table.Table
 

@@ -146,23 +146,23 @@ case class chSess(sess: Connection, taskId: Int) {
                      .toList
                  case _ => List.empty[Any]
                }
-
              filterTuples
            }.tapError(er => ZIO.logError(er.getMessage))
              .refineToOrDie[SQLException]
   } yield res
 
-  def whereAppendInt1(table: Table): ZIO[Any, SQLException, Option[List[Int]]] = for {
+  def whereAppendInt1(table: Table): ZIO[Any, SQLException, Option[List[Long]]] = for {
     res <- getSyncWhereFilterRsTuples(table)
-  } yield Some(res.map(_.asInstanceOf[Int]))
+  } yield Some(res.map(_.asInstanceOf[Long]))
 
-  def whereAppendInt2(table: Table): ZIO[Any, SQLException, Option[List[(Int, Int)]]] = for {
+  def whereAppendInt2(table: Table): ZIO[Any, SQLException, Option[List[(Long, Long)]]] = for {
     res <- getSyncWhereFilterRsTuples(table)
-  } yield Some(res.map(_.asInstanceOf[(Int, Int)]))
+  } yield Some(res.map(_.asInstanceOf[(Long, Long)]))
 
-  def whereAppendInt3(table: Table): ZIO[Any, SQLException, Option[List[(Int, Int, Int)]]] = for {
-    res <- getSyncWhereFilterRsTuples(table)
-  } yield Some(res.map(_.asInstanceOf[(Int, Int, Int)]))
+  def whereAppendInt3(table: Table): ZIO[Any, SQLException, Option[List[(Long, Long, Long)]]] =
+    for {
+      res <- getSyncWhereFilterRsTuples(table)
+    } yield Some(res.map(_.asInstanceOf[(Long, Long, Long)]))
 
   /**
    * Return the list of Primary key columns for clickhouse table. Using in part:) Engine = Join(ANY,
