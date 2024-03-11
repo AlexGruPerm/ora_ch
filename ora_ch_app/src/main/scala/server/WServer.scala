@@ -331,8 +331,7 @@ object WServer {
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo   <- ZIO.service[ImplCalcRepo]
     _      <- currStatusCheckerCalc()
-    _      <- (
-                CalcLogic
+    _      <- (CalcLogic
                   .getOraConnFromPool()
                   .flatMap { ora =>
                     CalcLogic.getCalcMeta(ora, reqCalc).flatMap { meta =>
