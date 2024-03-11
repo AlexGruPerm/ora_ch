@@ -332,20 +332,23 @@ object WServer {
     repo   <- ZIO.service[ImplCalcRepo]
     _      <- currStatusCheckerCalc()
     _      <- (
-                ZIO.sleep(60.seconds) *>
-                  CalcLogic.getOraConnFromPool().flatMap { ora =>
+                CalcLogic
+                  .getOraConnFromPool()
+                  .flatMap { ora =>
                     CalcLogic.getCalcMeta(ora, reqCalc).flatMap { meta =>
                       CalcLogic.startCalculation(ora, reqCalc, meta) *>
                         CalcLogic.copyDataChOra(ora, reqCalc, meta)
                     }
                   }
-              ).provide(
-                OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(), "Ucp_calc"),
-                ZLayer.succeed(repo),
-                ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
-                ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
-                ZLayer.succeed(SessCalc)
-              ).forkDaemon
+                )
+                .provide(
+                  OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(), "Ucp_calc"),
+                  ZLayer.succeed(repo),
+                  ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
+                  ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
+                  ZLayer.succeed(SessCalc)
+                )
+                .forkDaemon
     sched   = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
     calcId <- repo
                 .getCalcId
