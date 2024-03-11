@@ -68,7 +68,7 @@ object OraConnRepoImpl {
 
   private def acquire(conf: OraServer, par: Parallel): ZIO[Any, Exception, OraConnectionPool] =
     for {
-      _    <- ZIO.logInfo("acquire - new oracle connection pool")
+      _    <- ZIO.logInfo(s"acquire - new oracle connection pool with parallel = ${par.degree}")
       pool <- ZIO.attemptBlockingInterrupt {
                 new OraConnectionPool(conf, par)
               }.catchAll { case e: Exception =>

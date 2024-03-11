@@ -144,7 +144,6 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                      | where vq.id = $vqId """.stripMargin
                 val rsVq: ResultSet = sess.createStatement.executeQuery(queryVq)
                 rsVq.next()
-
                 val queryParams             =
                   s""" select p.param_name,p.param_type,p.param_order
                      |  from ora_to_ch_vq_params p
@@ -632,14 +631,13 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
   private def oraConnectionTaskEx(taskIdOpt: Option[Int]): ZIO[Any, SQLException, oraSessTask] =
     for {
       oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
-      sessEffect = ZIO.attemptBlockingInterrupt {
+      sess  <- ZIO.attemptBlockingInterrupt {
                      oraConn.setAutoCommit(false)
                      oraConn.setClientInfo("OCSID.MODULE", "ORATOCH")
                      oraConn.setClientInfo("OCSID.ACTION", "SLAVE_INIT")
                      oraSessTask(oraConn, taskIdOpt.getOrElse(0))
                    }.tapError(er => ZIO.logError(er.getMessage))
                      .refineToOrDie[SQLException]
-      sess      <- sessEffect
     } yield sess
 
   /**
@@ -677,8 +675,8 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
   } yield sess
 
   private def oraConnectionCalc(vqId: Int): ZIO[Any, SQLException, oraSessCalc] = for {
-    oraConn   <- oraRef.getConnection()
-    sessEffect = ZIO.attemptBlockingInterrupt {
+    oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
+    sess <- ZIO.attemptBlockingInterrupt {
                    val conn = oraConn
                    conn.setAutoCommit(false)
                    conn.setClientInfo("OCSID.MODULE", "ORATOCH")
@@ -686,15 +684,6 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
                    oraSessCalc(conn, vqId)
                  }.tapError(er => ZIO.logError(er.getMessage))
                    .refineToOrDie[SQLException]
-    sess      <- sessEffect
-    md         = sess.sess.getMetaData
-    sid       <- ZIO.attemptBlockingInterrupt {
-                   sess.getPid
-                 }.tapError(er => ZIO.logError(er.getMessage))
-                   .refineToOrDie[SQLException]
-    _         <- ZIO.logInfo(
-                   s"Oracle DriverVersion : ${md.getJDBCMajorVersion}.${md.getJDBCMinorVersion} SID = $sid"
-                 )
   } yield sess
 
 }

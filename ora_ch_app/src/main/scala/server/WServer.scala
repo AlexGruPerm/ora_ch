@@ -325,21 +325,22 @@ object WServer {
                 }
   } yield response
 
-  private def addOnInterr[R, E, A](eff: ZIO[R, E, A], desc: String): ZIO[R, E, A] =
-    eff.onInterrupt(CalcLogic.debugInterruption(desc))
-
   private def calcAndCopy(
     reqCalc: ReqCalcSrc,
     waitSeconds: Int
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo   <- ZIO.service[ImplCalcRepo]
     _      <- currStatusCheckerCalc()
-    meta    = CalcLogic.getCalcMeta(reqCalc)
-    _      <- meta.flatMap { meta =>
-                addOnInterr(CalcLogic.startCalculation(reqCalc, meta), "calc") *>
-                  addOnInterr(CalcLogic.copyDataChOra(reqCalc, meta), "copy")
-              }
-                .provide(
+    _      <- (
+               CalcLogic.getOraConnFromPool().flatMap{
+                 ora =>
+                   CalcLogic.getCalcMeta(ora, reqCalc).flatMap{
+                   meta => CalcLogic.startCalculation(ora, reqCalc, meta) *>
+                     ZIO.sleep(60.seconds) *>
+                   CalcLogic.copyDataChOra(ora, reqCalc, meta)
+                 }
+               }
+              ).provide(
                   OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel()),
                   ZLayer.succeed(repo),
                   ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
