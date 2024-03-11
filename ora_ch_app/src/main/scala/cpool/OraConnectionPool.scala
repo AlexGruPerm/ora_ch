@@ -10,14 +10,14 @@ import request.Parallel
  * https://docs.oracle.com/en/database/oracle/oracle-database/12.2/jjucp/toc.htm Also read 4.3 About
  * Optimizing Real-World Performance with Static Connection Pools
  */
-class OraConnectionPool(conf: OraServer, par: Parallel) {
+class OraConnectionPool(conf: OraServer, par: Parallel, poolName: String) {
   println(s" ******** OraConnectionPool CONSTRUCTOR with - ${par.degree} **********")
   val pool = PoolDataSourceFactory.getPoolDataSource
   pool.setConnectionFactoryClassName("oracle.jdbc.pool.OracleDataSource")
   pool.setURL(s"jdbc:oracle:thin:@//${conf.ip}:${conf.port}/${conf.tnsname}")
   pool.setUser(conf.user)
   pool.setPassword(conf.password)
-  pool.setConnectionPoolName("Ucp" /*props.ConnectionPoolName*/ )
+  pool.setConnectionPoolName(poolName /*props.ConnectionPoolName*/ )
   pool.setConnectionWaitTimeout(30 /*props.ConnectionWaitTimeout*/ )
   pool.setInitialPoolSize(1 /*props.InitialPoolSize*/ )
   // A connection pool always tries to return to the minimum pool size
@@ -40,7 +40,7 @@ class OraConnectionPool(conf: OraServer, par: Parallel) {
     jdbcVers
   }
 
-  def closePoolConnections: Unit = {
+  def closePoolConnections(poolName: String): Unit = {
     // println(s"closePoolConnections pool.getAvailableConnectionsCount = ${pool.getAvailableConnectionsCount} ")
     // println(s"closePoolConnections pool.getBorrowedConnectionsCount  = ${pool.getBorrowedConnectionsCount} ")
     val mgr: UniversalConnectionPoolManager =
@@ -51,7 +51,7 @@ class OraConnectionPool(conf: OraServer, par: Parallel) {
       c.asInstanceOf[ValidConnection].setInvalid()
       c.close()
     }
-    mgr.destroyConnectionPool("Ucp")
+    mgr.destroyConnectionPool(poolName)
   }
 
 }

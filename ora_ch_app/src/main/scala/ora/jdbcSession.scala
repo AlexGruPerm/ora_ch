@@ -590,7 +590,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
 
 trait jdbcSession {
   def sessTask(taskIdOpt: Option[Int] = Option.empty): ZIO[Any, SQLException, oraSessTask]
-  def closePool: ZIO[Any, SQLException, Unit]
+  //def closePool: ZIO[Any, SQLException, Unit]
   def sessCalc(vqId: Int = 0, debugMsg: String): ZIO[Any, SQLException, oraSessCalc]
   def renamePool(name: String): ZIO[Any, SQLException, Unit]
   val props = new Properties()
@@ -612,9 +612,9 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
                  oraConnectionTaskEx(taskIdOpt)
   } yield session
 
-  def closePool: ZIO[Any, SQLException, Unit] = for {
+/*  def closePool: ZIO[Any, SQLException, Unit] = for {
     _ <- oraRef.closeAll
-  } yield ()
+  } yield ()*/
 
   def renamePool(name: String): ZIO[Any, SQLException, Unit] = for {
     _ <- oraRef.setConnectionPoolName(name)

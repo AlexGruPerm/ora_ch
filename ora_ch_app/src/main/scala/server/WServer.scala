@@ -293,7 +293,7 @@ object WServer {
                       repo            <- ZIO.service[ImplTaskRepo]
                       _               <- currStatusCheckerTask()
                       layerOraConnRepo =
-                        OraConnRepoImpl.layer(newTask.servers.oracle, newTask.parallel)
+                        OraConnRepoImpl.layer(newTask.servers.oracle, newTask.parallel, "Ucp_task")
                       taskEffect       = startTask(newTask)
                                            .provide(
                                              layerOraConnRepo,
@@ -332,22 +332,20 @@ object WServer {
     repo   <- ZIO.service[ImplCalcRepo]
     _      <- currStatusCheckerCalc()
     _      <- (
-               CalcLogic.getOraConnFromPool().flatMap{
-                 ora =>
-                   CalcLogic.getCalcMeta(ora, reqCalc).flatMap{
-                   meta => CalcLogic.startCalculation(ora, reqCalc, meta) *>
-                     ZIO.sleep(60.seconds) *>
-                   CalcLogic.copyDataChOra(ora, reqCalc, meta)
-                 }
-               }
+                ZIO.sleep(60.seconds) *>
+                  CalcLogic.getOraConnFromPool().flatMap { ora =>
+                    CalcLogic.getCalcMeta(ora, reqCalc).flatMap { meta =>
+                      CalcLogic.startCalculation(ora, reqCalc, meta) *>
+                        CalcLogic.copyDataChOra(ora, reqCalc, meta)
+                    }
+                  }
               ).provide(
-                  OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel()),
-                  ZLayer.succeed(repo),
-                  ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
-                  ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
-                  ZLayer.succeed(SessCalc)
-                )
-                .forkDaemon
+                OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(), "Ucp_calc"),
+                ZLayer.succeed(repo),
+                ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
+                ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
+                ZLayer.succeed(SessCalc)
+              ).forkDaemon
     sched   = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
     calcId <- repo
                 .getCalcId
