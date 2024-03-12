@@ -11,22 +11,21 @@ import request.Parallel
  * Optimizing Real-World Performance with Static Connection Pools
  */
 class OraConnectionPool(conf: OraServer, par: Parallel, poolName: String) {
-  println(s" ******** OraConnectionPool CONSTRUCTOR with - ${par.degree} **********")
   val pool = PoolDataSourceFactory.getPoolDataSource
   pool.setConnectionFactoryClassName("oracle.jdbc.pool.OracleDataSource")
   pool.setURL(s"jdbc:oracle:thin:@//${conf.ip}:${conf.port}/${conf.tnsname}")
   pool.setUser(conf.user)
   pool.setPassword(conf.password)
-  pool.setConnectionPoolName(poolName /*props.ConnectionPoolName*/ )
-  pool.setConnectionWaitTimeout(30 /*props.ConnectionWaitTimeout*/ )
-  pool.setInitialPoolSize(1 /*props.InitialPoolSize*/ )
+  pool.setConnectionPoolName(poolName)
+  pool.setConnectionWaitTimeout(30)
+  pool.setInitialPoolSize(1)
   // A connection pool always tries to return to the minimum pool size
-  pool.setMinPoolSize(1 /*props.MinPoolSize*/ )
+  pool.setMinPoolSize(1)
   // The maximum pool size property specifies the maximum number of available
   // and borrowed (in use) connections that a pool maintains.
-  pool.setMaxPoolSize(par.degree /*props.MaxPoolSize*/ )
-  pool.setAbandonedConnectionTimeout(0 /*props.AbandonConnectionTimeout*/ )
-  pool.setInactiveConnectionTimeout(Integer.MAX_VALUE /*props.InactiveConnectionTimeout*/ )
+  pool.setMaxPoolSize(par.degree)
+  pool.setAbandonedConnectionTimeout(0)
+  pool.setInactiveConnectionTimeout(Integer.MAX_VALUE)
   // todo: check it.
   // https://docs.oracle.com/en/database/oracle/oracle-database/12.2/jjucp/validating-ucp-connections.html#GUID-A7C850D6-4026-4629-BCFA-9181C29EFBF9
   // pool.setValidateConnectionOnBorrow(true)
@@ -41,8 +40,8 @@ class OraConnectionPool(conf: OraServer, par: Parallel, poolName: String) {
   }
 
   def closePoolConnections(poolName: String): Unit = {
-    // println(s"closePoolConnections pool.getAvailableConnectionsCount = ${pool.getAvailableConnectionsCount} ")
-    // println(s"closePoolConnections pool.getBorrowedConnectionsCount  = ${pool.getBorrowedConnectionsCount} ")
+     println(s"closePoolConnections pool.getAvailableConnectionsCount = ${pool.getAvailableConnectionsCount} ")
+     println(s"closePoolConnections pool.getBorrowedConnectionsCount  = ${pool.getBorrowedConnectionsCount} ")
     val mgr: UniversalConnectionPoolManager =
       UniversalConnectionPoolManagerImpl.getUniversalConnectionPoolManager
     // mgr.stopConnectionPool("Ucp")

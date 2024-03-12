@@ -35,12 +35,8 @@ final case class OraConnRepoImpl(conf: OraServer, ref: Ref[OraConnectionPool]) e
   override def getConnection(
     setModule: Option[String] = Option.empty
   ): ZIO[Any, SQLException, Connection] = for {
-    _         <- ZIO.logInfo(">>>>>>>>>>>>>>>>>> getConnection in OraConnRepoImpl")
+    _         <- ZIO.logInfo("getConnection in OraConnRepoImpl")
     refPool   <- ref.get
-    _         <-
-      ZIO.logInfo(
-        s"PoolName = ${refPool.pool.getConnectionPoolName} MaxPoolSize = ${refPool.pool.getMaxPoolSize}"
-      )
     connection = refPool.pool.getConnection()
   } yield connection
 
@@ -66,34 +62,55 @@ final case class OraConnRepoImpl(conf: OraServer, ref: Ref[OraConnectionPool]) e
  */
 object OraConnRepoImpl {
 
-  private def acquire(conf: OraServer, par: Parallel, poolName: String): ZIO[Any, Exception, OraConnectionPool] =
+  def outputCreatePoolMsg(par: Parallel) = for {
+    _ <- ZIO.logInfo(" #########################################################################################")
+    _ <- ZIO.logInfo(s"OraConnRepoImpl.layer -> acquire - NEW ORACLE CONNECTION POOL CREATION with parallel = ${par.degree} ")
+    _ <- ZIO.logInfo("  >>> During the execution of one task, only one Pool should be created <<<")
+    _ <- ZIO.logInfo(" #########################################################################################")
+  } yield ()
+
+
+  private def acquire(
+    conf: OraServer,
+    par: Parallel,
+    poolName: String
+  ): ZIO[Any, Exception, OraConnectionPool] =
     for {
-      _    <- ZIO.logInfo(s"acquire - new oracle connection pool with parallel = ${par.degree}")
+      _    <- outputCreatePoolMsg(par)
       pool <- ZIO.attemptBlockingInterrupt {
                 new OraConnectionPool(conf, par, poolName)
               }.catchAll { case e: Exception =>
                 ZIO.logError(e.getMessage) *>
                   ZIO.fail(
-                    new Exception(s"createConnection : ${e.getMessage} - ${conf.getUrl()}")
+                    new Exception(s"Exception in acquire : ${e.getMessage} - ${conf.getUrl()}")
                   )
               }
     } yield pool
 
-  private def release(pool: => OraConnectionPool,poolName: String): ZIO[Any, Throwable, Unit] = for {
-    _ <- ZIO.logInfo("release - closing all connections.")
-    _ <- ZIO.attemptBlockingInterrupt {
-           pool.closePoolConnections(poolName)
-         }
-  } yield ()
+  private def release(pool: => OraConnectionPool, poolName: String): ZIO[Any, Throwable, Unit] =
+    for {
+      _ <- ZIO.logInfo("release - closing all connections.")
+      _ <- ZIO.attemptBlockingInterrupt {
+             pool.closePoolConnections(poolName)
+           }
+    } yield ()
 
-  private def source(conf: OraServer, par: Parallel, poolName: String): ZIO[Scope, Exception, OraConnectionPool] =
-    ZIO.acquireRelease(acquire(conf, par, poolName)) {pool =>
+  private def source(
+    conf: OraServer,
+    par: Parallel,
+    poolName: String
+  ): ZIO[Scope, Exception, OraConnectionPool] =
+    ZIO.acquireRelease(acquire(conf, par, poolName)) { pool =>
       release(pool, poolName).catchAll { e: Throwable =>
         ZIO.logError(s"release catchAll ${e.getMessage}")
       }
     }
 
-  def layer(conf: OraServer, par: Parallel, poolName: String): ZLayer[Any, Exception, OraConnRepoImpl] =
+  def layer(
+    conf: OraServer,
+    par: Parallel,
+    poolName: String
+  ): ZLayer[Any, Exception, OraConnRepoImpl] =
     ZLayer.scoped(
       source(conf, par, poolName).flatMap(conn => Ref.make(conn).map(r => OraConnRepoImpl(conf, r)))
     )

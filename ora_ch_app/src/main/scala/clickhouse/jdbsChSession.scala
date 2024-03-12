@@ -489,9 +489,9 @@ case class chSess(sess: Connection, taskId: Int) {
             val selectQuery: String = s"select * from ${meta.chSchema}.${meta.chTable}"
             println(s"getChTableResultSet selectQuery = $selectQuery")
             sess.createStatement.executeQuery(selectQuery)
-          }.tapBoth(
-            er => ZIO.logError(er.getMessage),
-            select => ZIO.logDebug(s"getChTableResultSet query = $select")
+          }.tapError(
+            er => ZIO.logError(er.getMessage)//,
+            //select => ZIO.logDebug(s"getChTableResultSet")
           ).refineToOrDie[SQLException]
   } yield rs
 
@@ -516,9 +516,9 @@ case class chSess(sess: Connection, taskId: Int) {
            val rs: ResultSet                      = sess.createStatement.executeQuery(insQuery)
            rs.close()
            insQuery
-         }.tapBoth(
-           er => ZIO.logError(er.getMessage),
-           query => ZIO.logDebug(s"insertFromQuery query = $query")
+         }.tapError(
+           er => ZIO.logError(er.getMessage)
+           //query => ZIO.logDebug(s"insertFromQuery query = $query")
          ).refineToOrDie[SQLException]
   } yield ()
 

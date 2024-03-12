@@ -36,6 +36,20 @@ sealed trait oraSess {
 }
 
 case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
+
+  def getOraSessionId(): ZIO[Any, SQLException, Int] = for {
+    sid <- ZIO.attemptBlockingInterrupt {
+             val stmt: Statement = sess.createStatement
+             val rs: ResultSet   =
+               stmt.executeQuery("select sys_context('USERENV','SID') as sid from dual")
+             rs.next()
+             val sessionId: Int  = rs.getInt("sid")
+             rs.close()
+             sess.close()
+             sessionId
+           }.refineToOrDie[SQLException]
+  } yield sid
+
   /**/
   def insertViewQueryLog(idVq: Int): ZIO[Any, SQLException, Int] = for {
     id <- ZIO.attemptBlockingInterrupt {
@@ -54,6 +68,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
             sess.setClientInfo("OCSID.ACTION", s"calc_$id")
             sess.commit()
             insertVqLog.close()
+            sess.close()
             id
           }.tapError(er => ZIO.logError(er.getMessage))
             .refineToOrDie[SQLException]
@@ -73,6 +88,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            rs.next()
            sess.commit()
            rs.close()
+           sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -105,6 +121,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val rs: ResultSet = sess.createStatement.executeQuery(query)
            sess.commit()
            rs.close()
+           ////sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -116,6 +133,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val rs: ResultSet = sess.createStatement.executeQuery(query)
            sess.commit()
            rs.close()
+           ////sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -131,6 +149,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val rs: ResultSet = sess.createStatement.executeQuery(query)
            sess.commit()
            rs.close()
+           sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -138,11 +157,11 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
   def getVqMeta(vqId: Int): ZIO[Any, SQLException, ViewQueryMeta] = for {
     _      <- ZIO.unit
     vqMeta <- ZIO.attemptBlockingInterrupt {
-                val queryVq         =
+                val queryVq                 =
                   s""" select vq.view_name,vq.ch_table,vq.ora_table,vq.query_text,vq.ch_schema,vq.ora_schema
                      |  from ora_to_ch_views_query vq
                      | where vq.id = $vqId """.stripMargin
-                val rsVq: ResultSet = sess.createStatement.executeQuery(queryVq)
+                val rsVq: ResultSet         = sess.createStatement.executeQuery(queryVq)
                 rsVq.next()
                 val queryParams             =
                   s""" select p.param_name,p.param_type,p.param_order
@@ -188,6 +207,8 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                 )
                 rsVq.close()
                 rsParams.close()
+
+                ////sess.close()
                 vqm
               }.tapError(er => ZIO.logError(er.getMessage))
                 .refineToOrDie[SQLException]
@@ -264,6 +285,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
               ps.executeBatch()
               sess.commit()
               rs.close()
+              ////sess.close()
             }.tapError(er => ZIO.logError(er.getMessage))
               .refineToOrDie[SQLException]
   } yield ()
@@ -590,17 +612,13 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
 
 trait jdbcSession {
   def sessTask(taskIdOpt: Option[Int] = Option.empty): ZIO[Any, SQLException, oraSessTask]
-  //def closePool: ZIO[Any, SQLException, Unit]
   def sessCalc(vqId: Int = 0, debugMsg: String): ZIO[Any, SQLException, oraSessCalc]
-  def renamePool(name: String): ZIO[Any, SQLException, Unit]
   val props = new Properties()
 }
 
 case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) extends jdbcSession {
 
-  println(" ")
-  println(s"###### This is a jdbcSessionImpl main constructor sessType = $sessType  ########")
-  println(" ")
+  println(s" jdbcSessionImpl main constructor sessType = $sessType")
 
   def sessTask(taskIdOpt: Option[Int] = Option.empty): ZIO[Any, SQLException, oraSessTask] = for {
     _       <- ZIO.logInfo(
@@ -612,32 +630,24 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
                  oraConnectionTaskEx(taskIdOpt)
   } yield session
 
-/*  def closePool: ZIO[Any, SQLException, Unit] = for {
-    _ <- oraRef.closeAll
-  } yield ()*/
-
-  def renamePool(name: String): ZIO[Any, SQLException, Unit] = for {
-    _ <- oraRef.setConnectionPoolName(name)
-  } yield ()
-
   def sessCalc(vqId: Int, debugMsg: String): ZIO[Any, SQLException, oraSessCalc] = for {
     _       <- ZIO.logInfo(s"[sessCalc] jdbcSessionImpl.sess [$debugMsg] call oraConnectionCalc")
     session <- oraConnectionCalc(vqId)
   } yield session
 
   /**
-   * When task executing now and taskId known.
+   * When task executing now and taskId is known.
    */
   private def oraConnectionTaskEx(taskIdOpt: Option[Int]): ZIO[Any, SQLException, oraSessTask] =
     for {
-      oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
-      sess  <- ZIO.attemptBlockingInterrupt {
-                     oraConn.setAutoCommit(false)
-                     oraConn.setClientInfo("OCSID.MODULE", "ORATOCH")
-                     oraConn.setClientInfo("OCSID.ACTION", "SLAVE_INIT")
-                     oraSessTask(oraConn, taskIdOpt.getOrElse(0))
-                   }.tapError(er => ZIO.logError(er.getMessage))
-                     .refineToOrDie[SQLException]
+      oraConn <- oraRef.getConnection().refineToOrDie[SQLException]
+      sess    <- ZIO.attemptBlockingInterrupt {
+                   oraConn.setAutoCommit(false)
+                   oraConn.setClientInfo("OCSID.MODULE", "ORATOCH")
+                   oraConn.setClientInfo("OCSID.ACTION", "SLAVE_INIT")
+                   oraSessTask(oraConn, taskIdOpt.getOrElse(0))
+                 }.tapError(er => ZIO.logError(er.getMessage))
+                   .refineToOrDie[SQLException]
     } yield sess
 
   /**
@@ -675,15 +685,15 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
   } yield sess
 
   private def oraConnectionCalc(vqId: Int): ZIO[Any, SQLException, oraSessCalc] = for {
-    oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
-    sess <- ZIO.attemptBlockingInterrupt {
-                   val conn = oraConn
-                   conn.setAutoCommit(false)
-                   conn.setClientInfo("OCSID.MODULE", "ORATOCH")
-                   conn.setClientInfo("OCSID.ACTION", s"unknown")
-                   oraSessCalc(conn, vqId)
-                 }.tapError(er => ZIO.logError(er.getMessage))
-                   .refineToOrDie[SQLException]
+    oraConn <- oraRef.getConnection().refineToOrDie[SQLException]
+    sess    <- ZIO.attemptBlockingInterrupt {
+                 val conn = oraConn
+                 conn.setAutoCommit(false)
+                 conn.setClientInfo("OCSID.MODULE", "ORATOCH")
+                 conn.setClientInfo("OCSID.ACTION", s"unknown")
+                 oraSessCalc(conn, vqId)
+               }.tapError(er => ZIO.logError(er.getMessage))
+                 .refineToOrDie[SQLException]
   } yield sess
 
 }

@@ -331,23 +331,19 @@ object WServer {
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo   <- ZIO.service[ImplCalcRepo]
     _      <- currStatusCheckerCalc()
-    _      <- (CalcLogic
-                  .getOraConnFromPool()
-                  .flatMap { ora =>
-                    CalcLogic.getCalcMeta(ora, reqCalc).flatMap { meta =>
-                      CalcLogic.startCalculation(ora, reqCalc, meta) *>
-                        CalcLogic.copyDataChOra(ora, reqCalc, meta)
-                    }
-                  }
-                )
-                .provide(
-                  OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(), "Ucp_calc"),
-                  ZLayer.succeed(repo),
-                  ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
-                  ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
-                  ZLayer.succeed(SessCalc)
-                )
-                .forkDaemon
+    meta = CalcLogic.getCalcMeta(reqCalc)
+    _ <- meta.flatMap { m =>
+        CalcLogic.startCalculation(reqCalc, m) *>
+          CalcLogic.copyDataChOra(reqCalc, m)
+      }
+      .provide(
+        OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(), "Ucp_calc"),
+        ZLayer.succeed(repo),
+        ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
+        ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
+        ZLayer.succeed(SessCalc)
+      )
+      .forkDaemon
     sched   = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
     calcId <- repo
                 .getCalcId
@@ -355,7 +351,7 @@ object WServer {
                 .retryOrElse(
                   sched,
                   (_: String, _: (Long, Long)) =>
-                    ZIO.fail(new Exception("Elapsed wait time 10 seconds of getting calcId"))
+                    ZIO.fail(new Exception(s"Elapsed wait time $waitSeconds seconds of getting calcId"))
                 )
   } yield Response.json(s"""{"calcId":"$calcId"}""").status(Status.Ok)
 
@@ -363,8 +359,8 @@ object WServer {
     req: Request,
     waitSeconds: Int
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
-    bodyText <- req.body.asString
-    _        <- ZIO.logDebug(s"calc body = $bodyText")
+    //bodyText <- req.body.asString
+    //_        <- ZIO.logDebug(s"calc body = $bodyText")
     reqCalcE <- requestToEntity[ReqCalcSrc](req)
     _        <- ZIO.logDebug(s"JSON = $reqCalcE")
     resp     <- reqCalcE match {
