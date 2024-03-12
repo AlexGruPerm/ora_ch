@@ -63,12 +63,20 @@ final case class OraConnRepoImpl(conf: OraServer, ref: Ref[OraConnectionPool]) e
 object OraConnRepoImpl {
 
   def outputCreatePoolMsg(par: Parallel) = for {
-    _ <- ZIO.logInfo(" #########################################################################################")
-    _ <- ZIO.logInfo(s"OraConnRepoImpl.layer -> acquire - NEW ORACLE CONNECTION POOL CREATION with parallel = ${par.degree} ")
+    _ <-
+      ZIO.logInfo(
+        " #########################################################################################"
+      )
+    _ <-
+      ZIO.logInfo(
+        s"OraConnRepoImpl.layer -> acquire - NEW ORACLE CONNECTION POOL CREATION with parallel = ${par.degree} "
+      )
     _ <- ZIO.logInfo("  >>> During the execution of one task, only one Pool should be created <<<")
-    _ <- ZIO.logInfo(" #########################################################################################")
+    _ <-
+      ZIO.logInfo(
+        " #########################################################################################"
+      )
   } yield ()
-
 
   private def acquire(
     conf: OraServer,

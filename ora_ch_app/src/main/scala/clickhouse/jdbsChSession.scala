@@ -148,7 +148,9 @@ case class chSess(sess: Connection, taskId: Int) {
                }
              filterTuples
            }.refineToOrDie[SQLException]
-      .tapError(er => ZIO.logError(s"Error in getSyncWhereFilterRsTuples - ${er.getMessage}"))
+             .tapError(er =>
+               ZIO.logError(s"Error in getSyncWhereFilterRsTuples - ${er.getMessage}")
+             )
 
   } yield res
 
@@ -490,9 +492,8 @@ case class chSess(sess: Connection, taskId: Int) {
             val selectQuery: String = s"select * from ${meta.chSchema}.${meta.chTable}"
             println(s"getChTableResultSet selectQuery = $selectQuery")
             sess.createStatement.executeQuery(selectQuery)
-          }.tapError(
-            er => ZIO.logError(er.getMessage)//,
-            //select => ZIO.logDebug(s"getChTableResultSet")
+          }.tapError(er => ZIO.logError(er.getMessage) // ,
+          // select => ZIO.logDebug(s"getChTableResultSet")
           ).refineToOrDie[SQLException]
   } yield rs
 
@@ -517,9 +518,8 @@ case class chSess(sess: Connection, taskId: Int) {
            val rs: ResultSet                      = sess.createStatement.executeQuery(insQuery)
            rs.close()
            insQuery
-         }.tapError(
-           er => ZIO.logError(er.getMessage)
-           //query => ZIO.logDebug(s"insertFromQuery query = $query")
+         }.tapError(er => ZIO.logError(er.getMessage)
+         // query => ZIO.logDebug(s"insertFromQuery query = $query")
          ).refineToOrDie[SQLException]
   } yield ()
 

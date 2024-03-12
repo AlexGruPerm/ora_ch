@@ -5,7 +5,7 @@ import clickhouse.{ chSess, jdbcChSession, jdbcChSessionImpl }
 import common.Types.MaxValAndCnt
 import error.ResponseMessage
 import ora.{ jdbcSession, jdbcSessionImpl, oraSessTask }
-import request.{ Parallel, ReqNewTask}
+import request.{ Parallel, ReqNewTask }
 import task.{ ImplTaskRepo, WsTask }
 import zio._
 import zio.http._
@@ -57,7 +57,7 @@ object WServer {
                 updateFiber.get.interrupt
               else
                 ZIO.unit
-              //updateFiber.get.interrupt.when(updateFiber.nonEmpty)
+      // updateFiber.get.interrupt.when(updateFiber.nonEmpty)
     } yield ()
 
   private def copyTableEffect(

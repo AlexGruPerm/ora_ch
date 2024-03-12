@@ -40,8 +40,12 @@ class OraConnectionPool(conf: OraServer, par: Parallel, poolName: String) {
   }
 
   def closePoolConnections(poolName: String): Unit = {
-     println(s"closePoolConnections pool.getAvailableConnectionsCount = ${pool.getAvailableConnectionsCount} ")
-     println(s"closePoolConnections pool.getBorrowedConnectionsCount  = ${pool.getBorrowedConnectionsCount} ")
+    println(
+      s"closePoolConnections pool.getAvailableConnectionsCount = ${pool.getAvailableConnectionsCount} "
+    )
+    println(
+      s"closePoolConnections pool.getBorrowedConnectionsCount  = ${pool.getBorrowedConnectionsCount} "
+    )
     val mgr: UniversalConnectionPoolManager =
       UniversalConnectionPoolManagerImpl.getUniversalConnectionPoolManager
     // mgr.stopConnectionPool("Ucp")

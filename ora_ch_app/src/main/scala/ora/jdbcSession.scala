@@ -121,7 +121,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val rs: ResultSet = sess.createStatement.executeQuery(query)
            sess.commit()
            rs.close()
-           ////sess.close()
+           //// sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -133,7 +133,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val rs: ResultSet = sess.createStatement.executeQuery(query)
            sess.commit()
            rs.close()
-           ////sess.close()
+           //// sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -208,7 +208,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                 rsVq.close()
                 rsParams.close()
 
-                ////sess.close()
+                //// sess.close()
                 vqm
               }.tapError(er => ZIO.logError(er.getMessage))
                 .refineToOrDie[SQLException]
@@ -285,7 +285,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
               ps.executeBatch()
               sess.commit()
               rs.close()
-              ////sess.close()
+              //// sess.close()
             }.tapError(er => ZIO.logError(er.getMessage))
               .refineToOrDie[SQLException]
   } yield ()
