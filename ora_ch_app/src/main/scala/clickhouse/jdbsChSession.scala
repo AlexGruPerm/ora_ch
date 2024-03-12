@@ -147,8 +147,9 @@ case class chSess(sess: Connection, taskId: Int) {
                  case _ => List.empty[Any]
                }
              filterTuples
-           }.tapError(er => ZIO.logError(er.getMessage))
-             .refineToOrDie[SQLException]
+           }.refineToOrDie[SQLException]
+      .tapError(er => ZIO.logError(s"Error in getSyncWhereFilterRsTuples - ${er.getMessage}"))
+
   } yield res
 
   def whereAppendInt1(table: Table): ZIO[Any, SQLException, Option[List[Long]]] = for {

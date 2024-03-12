@@ -1,13 +1,11 @@
 package server
 
-import calc.CalcLogic.getCalcMeta
-import calc.{ CalcLogic, ImplCalcRepo, ReqCalc, ReqCalcSrc }
+import calc.{ CalcLogic, ImplCalcRepo, ReqCalcSrc }
 import clickhouse.{ chSess, jdbcChSession, jdbcChSessionImpl }
 import common.Types.MaxValAndCnt
-import conf.OraServer
 import error.ResponseMessage
 import ora.{ jdbcSession, jdbcSessionImpl, oraSessTask }
-import request.{ Parallel, ReqNewTask, SrcTable }
+import request.{ Parallel, ReqNewTask}
 import task.{ ImplTaskRepo, WsTask }
 import zio._
 import zio.http._
@@ -16,13 +14,9 @@ import request.EncDecReqNewTaskImplicits._
 import calc.EncDecReqCalcImplicits._
 import common.{ SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _ }
 import connrepo.OraConnRepoImpl
-import server.WServer.{ calc, startTask }
 import table.Table
-import zio.json.JsonDecoder.fromCodec
-
 import java.io.IOException
 import java.sql.SQLException
-import scala.collection.immutable.List
 
 object WServer {
 
@@ -50,16 +44,20 @@ object WServer {
   private def saveError(
     sess: oraSessTask,
     errorMsg: String,
-    updateFiber: Fiber.Runtime[Exception, Long],
+    updateFiber: Option[Fiber.Runtime[Exception, Long]],
     table: Table
   ): ZIO[ImplTaskRepo, Throwable, Unit] =
     for {
       _    <- sess.setTaskError(errorMsg, table)
-      _    <- updateFiber.interrupt
       repo <- ZIO.service[ImplTaskRepo]
-      _    <- ZIO.logError(s"Error for table [${table.fullTableName()}] - $errorMsg")
       _    <- repo.setState(TaskState(Wait))
       _    <- repo.clearTask
+      _    <- ZIO.logError(s"Error for table [${table.fullTableName()}] - $errorMsg")
+      _    <- if (updateFiber.nonEmpty)
+                updateFiber.get.interrupt
+              else
+                ZIO.unit
+              //updateFiber.get.interrupt.when(updateFiber.nonEmpty)
     } yield ()
 
   private def copyTableEffect(
@@ -76,12 +74,16 @@ object WServer {
     _            <- ZIO.logDebug(s"maxValAndCnt = $maxValAndCnt")
     arity         = table.syncArity()
     _            <- ZIO.logDebug(s"arity = $arity")
-    appendKeys   <- arity match {
+    appendKeys   <- (arity match {
                       case 1 => sessCh.whereAppendInt1(table)
                       case 2 => sessCh.whereAppendInt2(table)
                       case 3 => sessCh.whereAppendInt3(table)
                       case _ => ZIO.succeed(None)
-                    }
+                    }).refineToOrDie[SQLException]
+                      .tapError(er =>
+                        ZIO.logError(s"Error in one of sessCh.whereAppendIntX - ${er.getMessage}") *>
+                          saveError(sess, er.getMessage, None, table)
+                      )
     _            <- ZIO.logDebug(s"appendKeys = $appendKeys")
     fiberUpdCnt  <- updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt)
                       .delay(2.second)
@@ -96,8 +98,7 @@ object WServer {
                       .recreateTableCopyData(table, rs, batch_size, maxValAndCnt)
                       .tapError(er =>
                         ZIO.logError(er.getMessage) *>
-                          // fiber will be interrupted inside
-                          saveError(sess, er.getMessage, fiberUpdCnt, table)
+                          saveError(sess, er.getMessage, Some(fiberUpdCnt), table)
                       )
                       .refineToOrDie[SQLException]
     _            <- fiberUpdCnt.interrupt
@@ -196,7 +197,7 @@ object WServer {
                     }
                   }
     _          <- if (wstask.parDegree <= 2)
-                    ZIO.logInfo(s"copyEffects sequentially with parDegree = ${wstask.parDegree}") *>
+                    ZIO.logInfo(s"copyEffects SEQUENTIALLY with parDegree = ${wstask.parDegree}") *>
                       ZIO.collectAll(copyEffects)
                   else
                     ZIO.logInfo(s"copyEffects IN PARALLEL with parDegree = ${wstask.parDegree}") *>
@@ -331,36 +332,37 @@ object WServer {
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo   <- ZIO.service[ImplCalcRepo]
     _      <- currStatusCheckerCalc()
-    meta = CalcLogic.getCalcMeta(reqCalc)
-    _ <- meta.flatMap { m =>
-        CalcLogic.startCalculation(reqCalc, m) *>
-          CalcLogic.copyDataChOra(reqCalc, m)
-      }
-      .provide(
-        OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(), "Ucp_calc"),
-        ZLayer.succeed(repo),
-        ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
-        ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
-        ZLayer.succeed(SessCalc)
-      )
-      .forkDaemon
-    sched   = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
-    calcId <- repo
-                .getCalcId
-                .filterOrFail(_ != 0)(0.toString)
-                .retryOrElse(
-                  sched,
-                  (_: String, _: (Long, Long)) =>
-                    ZIO.fail(new Exception(s"Elapsed wait time $waitSeconds seconds of getting calcId"))
+    meta    = CalcLogic.getCalcMeta(reqCalc)
+    _      <- meta.flatMap { m =>
+                CalcLogic.startCalculation(reqCalc, m) *>
+                  CalcLogic.copyDataChOra(reqCalc, m)
+              }
+                .provide(
+                  OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(), "Ucp_calc"),
+                  ZLayer.succeed(repo),
+                  ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
+                  ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
+                  ZLayer.succeed(SessCalc)
                 )
+                .forkDaemon
+    sched   = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
+    calcId <-
+      repo
+        .getCalcId
+        .filterOrFail(_ != 0)(0.toString)
+        .retryOrElse(
+          sched,
+          (_: String, _: (Long, Long)) =>
+            ZIO.fail(new Exception(s"Elapsed wait time $waitSeconds seconds of getting calcId"))
+        )
   } yield Response.json(s"""{"calcId":"$calcId"}""").status(Status.Ok)
 
   private def calc(
     req: Request,
     waitSeconds: Int
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
-    //bodyText <- req.body.asString
-    //_        <- ZIO.logDebug(s"calc body = $bodyText")
+    // bodyText <- req.body.asString
+    // _        <- ZIO.logDebug(s"calc body = $bodyText")
     reqCalcE <- requestToEntity[ReqCalcSrc](req)
     _        <- ZIO.logDebug(s"JSON = $reqCalcE")
     resp     <- reqCalcE match {
