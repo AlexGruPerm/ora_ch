@@ -289,6 +289,15 @@ case class chSess(sess: Connection, taskId: Int) {
              .refineToOrDie[SQLException]
              .when(table.recreate == 1)
 
+      //by issues_21
+      _ <- ZIO.attemptBlockingInterrupt {
+          sess
+            .createStatement
+            .executeQuery(s"delete from ${table.schema}.${table.name} where ${table.where_filter.getOrElse(" ")}")
+        }.tapError(er => ZIO.logError(er.getMessage))
+        .refineToOrDie[SQLException]
+        .when(table.recreate == 0 && table.where_filter.nonEmpty)
+
       rows <- ZIO.attemptBlockingInterrupt {
                 val ps: PreparedStatement = sess.prepareStatement(insQuer)
                 Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) { case (counter, rs) =>

@@ -74,7 +74,9 @@ object WServer {
     _            <- ZIO.logDebug(s"maxValAndCnt = $maxValAndCnt")
     arity         = table.syncArity()
     _            <- ZIO.logDebug(s"arity = $arity")
-    appendKeys   <- (arity match {
+                   //issues_21 if "where_filter" is specified we don't use "sync_by_columns"
+    appendKeys   <- if (table.where_filter.isEmpty) {
+                    (arity match {
                       case 1 => sessCh.whereAppendInt1(table)
                       case 2 => sessCh.whereAppendInt2(table)
                       case 3 => sessCh.whereAppendInt3(table)
@@ -82,8 +84,9 @@ object WServer {
                     }).refineToOrDie[SQLException]
                       .tapError(er =>
                         ZIO.logError(s"Error in one of sessCh.whereAppendIntX - ${er.getMessage}") *>
-                          saveError(sess, er.getMessage, None, table)
-                      )
+                          saveError(sess, er.getMessage, None, table))
+    } else ZIO.none
+
     _            <- ZIO.logDebug(s"appendKeys = $appendKeys")
     fiberUpdCnt  <- updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt)
                       .delay(2.second)

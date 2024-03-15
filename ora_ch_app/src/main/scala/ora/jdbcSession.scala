@@ -332,7 +332,10 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
             .mkString(",")})"""
       } else
         " "
-    s" $filterStr not in $filterTuples "
+    if (appendKeys.nonEmpty)
+      s" $filterStr not in $filterTuples "
+    else
+      " "
   }
 
   def getDataResultSet(
@@ -380,7 +383,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                            table.sync_by_columns
                          ) match {
                            case (Some(where), Some(syncCol), None) => s" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
-                           case (Some(where), None, Some(_))       => s" where $where and $whereByFields "
+                           case (Some(where), None, Some(_))       => s" where $where "//s" where $where and $whereByFields " BY issues_21
                            case (_, None, Some(_))                 => s" where $whereByFields "
                            case (_, Some(syncCol), None)           => s" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
                            case (Some(where), _, _)                => s" where $where "
