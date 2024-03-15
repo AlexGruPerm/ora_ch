@@ -379,12 +379,10 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                            table.sync_by_column_max orElse table.sync_update_by_column_max,
                            table.sync_by_columns
                          ) match {
-                           case (Some(where), Some(syncCol), None) =>
-                             s" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
+                           case (Some(where), Some(syncCol), None) => s" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
                            case (Some(where), None, Some(_))       => s" where $where and $whereByFields "
                            case (_, None, Some(_))                 => s" where $whereByFields "
-                           case (_, Some(syncCol), None)           =>
-                             s" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
+                           case (_, Some(syncCol), None)           => s" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
                            case (Some(where), _, _)                => s" where $where "
                            case _                                  => " "
                          }}
