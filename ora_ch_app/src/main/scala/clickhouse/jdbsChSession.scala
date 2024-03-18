@@ -15,6 +15,7 @@ import java.time.{ LocalDateTime, ZoneOffset }
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 import common.Types._
+import request.AppendWhere
 
 case class chSess(sess: Connection, taskId: Int) {
 
@@ -69,6 +70,7 @@ case class chSess(sess: Connection, taskId: Int) {
                 |""".stripMargin
            val rs            = sess.createStatement.executeQuery(updateQuery)
            rs.close()
+           println(s"DEBUG updateColumns updateQuery = $updateQuery")
            updateQuery
          }.tapBoth(
            er => ZIO.logError(er.getMessage),
@@ -78,7 +80,6 @@ case class chSess(sess: Connection, taskId: Int) {
 
   def getMaxValueByColCh(table: Table): ZIO[Any, SQLException, MaxValAndCnt] = for {
     maxVal <- ZIO.attemptBlockingInterrupt {
-
                 /**
                  * We have 2 append mode: 1) sync_by_column_max - single column In this case we need
                  * to know current maxVal. 2) sync_by_columns - by multiple fields. In this case
@@ -102,12 +103,7 @@ case class chSess(sess: Connection, taskId: Int) {
   } yield maxVal
 
   def getMaxColForSync(table: Table): ZIO[Any, SQLException, Option[MaxValAndCnt]] = for {
-    tblExistsCh <- isTableExistsCh(table)
-                     .when(
-                       table.sync_by_column_max.nonEmpty ||
-                         table.sync_update_by_column_max.nonEmpty ||
-                         table.sync_by_columns.nonEmpty
-                     )
+    tblExistsCh <- isTableExistsCh(table).when(table.recreate == 0)
     maxColCh    <- getMaxValueByColCh(table).when(tblExistsCh.getOrElse(0) == 1)
   } yield maxColCh
 
@@ -231,6 +227,21 @@ case class chSess(sess: Connection, taskId: Int) {
          }
   } yield ()
 
+  def deleteRowsFromChTable(table: Table): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt {
+           sess
+             .createStatement
+             .executeQuery(
+               s"delete from ${table.schema}.${table.name} where ${table.where_filter.getOrElse(" ")}"
+             )
+         }.tapError(er => ZIO.logError(er.getMessage))
+           .refineToOrDie[SQLException]
+           .when(
+             table.recreate == 0 &&
+               table.operation == AppendWhere
+           )
+  } yield ()
+
   def recreateTableCopyData(
     table: Table,
     rs: ZIO[Any, SQLException, ResultSet],
@@ -289,14 +300,17 @@ case class chSess(sess: Connection, taskId: Int) {
              .refineToOrDie[SQLException]
              .when(table.recreate == 1)
 
-      //by issues_21
-      _ <- ZIO.attemptBlockingInterrupt {
-          sess
-            .createStatement
-            .executeQuery(s"delete from ${table.schema}.${table.name} where ${table.where_filter.getOrElse(" ")}")
-        }.tapError(er => ZIO.logError(er.getMessage))
-        .refineToOrDie[SQLException]
-        .when(table.recreate == 0 && table.where_filter.nonEmpty)
+      /*      _ <- ZIO.attemptBlockingInterrupt {
+             sess
+               .createStatement
+               .executeQuery(
+                 s"delete from ${table.schema}.${table.name} where ${table.where_filter.getOrElse(" ")}"
+               )
+           }.tapError(er => ZIO.logError(er.getMessage))
+             .refineToOrDie[SQLException]
+             .when(table.recreate == 0 &&
+               table.operation == AppendWhere
+             )*/
 
       rows <- ZIO.attemptBlockingInterrupt {
                 val ps: PreparedStatement = sess.prepareStatement(insQuer)

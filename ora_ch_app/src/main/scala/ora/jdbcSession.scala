@@ -1,26 +1,18 @@
 package ora
 
-import calc.{ VQParams, ViewQueryMeta }
+import calc.{VQParams, ViewQueryMeta}
 import column.OraChColumn
-import zio.{ Task, ZIO, _ }
+import zio.{Task, ZIO, _}
 import conf.OraServer
 import oracle.jdbc.OracleDriver
-import request.SrcTable
+import request.{AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable}
 import table.Table
 
-import java.sql.{
-  Clob,
-  Connection,
-  DriverManager,
-  PreparedStatement,
-  ResultSet,
-  SQLException,
-  Statement
-}
+import java.sql.{Clob, Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Statement}
 import java.util.Properties
 import common.Types._
 import OraChColumn._
-import common.{ ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum }
+import common.{ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum}
 import connrepo.OraConnRepoImpl
 
 sealed trait oraSess {
@@ -345,12 +337,11 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
     maxColCh: Option[MaxValAndCnt],
     appendKeys: Option[List[Any]] = Option.empty[List[Any]]
   ): ZIO[Any, SQLException, ResultSet] = for {
-    sid <- ZIO.attemptBlockingInterrupt {
-             getPid
-           }.tapError(er => ZIO.logError(er.getMessage))
-             .refineToOrDie[SQLException]
-
-    _ <-
+    sid         <- ZIO.attemptBlockingInterrupt {
+                     getPid
+                   }.tapError(er => ZIO.logError(er.getMessage))
+                     .refineToOrDie[SQLException]
+    _           <-
       ZIO.attemptBlockingInterrupt {
         val query: String =
           s""" update ora_to_ch_tasks_tables t
@@ -366,31 +357,40 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
       }.tapError(er => ZIO.logError(er.getMessage))
         .refineToOrDie[SQLException]
 
-    _           <-
+    /*    _           <-
       ZIO.logDebug(
-        s"recreateTableCopyData sid=$sid arity = ${table.syncArity()} appendKeys.nonEmpty = ${appendKeys.nonEmpty}"
-      )
+        s"getDataResultSet sid=$sid arity = ${table.syncArity()} appendKeys.nonEmpty = ${appendKeys.nonEmpty}"
+      )*/
     _           <-
       ZIO.logInfo(s"getDataResultSet maxColCh.CntRows = ${maxColCh.map(_.CntRows).getOrElse(0L)}")
+
     rsWithQuery <- ZIO.attemptBlockingInterrupt {
                      val whereByFields: String = getAppendByFieldsPart(table, appendKeys)
                      val dataQuery             =
-                       s""" select /*+ ALL_ROWS */ ${table
-                           .only_columns
-                           .getOrElse("*")} from ${table.schema}.${table.name} ${(
-                           table.where_filter,
-                           table.sync_by_column_max orElse table.sync_update_by_column_max,
-                           table.sync_by_columns
-                         ) match {
-                           case (Some(where), Some(syncCol), None) => s" where $where and $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
-                           case (Some(where), None, Some(_))       => s" where $where "//s" where $where and $whereByFields " BY issues_21
-                           case (_, None, Some(_))                 => s" where $whereByFields "
-                           case (_, Some(syncCol), None)           => s" where $syncCol > ${maxColCh.map(_.MaxValue).getOrElse(0L)} "
-                           case (Some(where), _, _)                => s" where $where "
-                           case _                                  => " "
+                       s""" select /*+ ALL_ROWS */ ${table.only_columns.getOrElse("*")} from ${table
+                           .fullTableName()} ${table.operation match {
+                         case Recreate => s"${table.where_filter.map(where_filter =>s" where $where_filter").getOrElse(" ")}"
+                         case AppendWhere =>
+                           table.where_filter match {
+                             case Some(wf) => s" where $wf"
+                             case None => " "
+                           }
+                         case AppendByMax =>
+                           (table.where_filter,maxColCh.map(_.MaxValue)) match {
+                             case (Some(wf),Some(maxId)) => s" where $wf and ${table.sync_by_column_max.getOrElse("X")} > $maxId "
+                             case (Some(wf),None)        => s" where $wf "
+                             case (None,Some(maxId))     => s" where ${table.sync_by_column_max.getOrElse("X")} > $maxId "
+                             case (None,None)            => " "
+                           }
+                         //in this case we don't add where_filter, you can use AppendWhere.
+                         case AppendNotIn => s" where $whereByFields "
+                         case _ => " "
                          }}
           ${table.ins_select_order_by.map(order => s" order by $order ").getOrElse(" ")}
         """.stripMargin
+
+                    println(s"DEBUG_QUERY = $dataQuery")
+
                      setContext(table)
                      val dataRs                = sess
                        .createStatement(
@@ -405,8 +405,9 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                        ZIO.logError(
                          s"Exception: ${er.getMessage} curr_date_context=${table.curr_date_context}"
                        ),
-                     rsq => ZIO.logDebug(s"getDataResultSet select = ${rsq.query} ")
+                     rsq => ZIO.logDebug(s" >>>>>>>>>>>>>   getDataResultSet select = ${rsq.query} ")
                    ).refineToOrDie[SQLException]
+    _ <- ZIO.logInfo(s"ORACLE getDataResultSet, QUERY = ${rsWithQuery.query}")
   } yield rsWithQuery.rs
 
   /**
@@ -544,7 +545,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
   } yield rows
 
-  def setTableCopied(table: Table, rowCount: Long, status: String): ZIO[Any, SQLException, Unit] =
+  def setTableCopied(table: Table, rowCount: Long): ZIO[Any, SQLException, Unit] =
     for {
       taskId <- getTaskIdFromSess
       _      <-
@@ -552,7 +553,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
           val query: String =
             s""" update ora_to_ch_tasks_tables t
                |   set end_datetime = sysdate,
-               |             state  = '$status',
+               |             state  = '${table.finishStatus()}',
                |             copied_records_count = $rowCount,
                |             speed_rows_sec = (case
                |                                when ((sysdate - t.begin_datetime)*24*60*60) != 0
@@ -587,7 +588,8 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
           ZIO.succeed(
             Table(
               st.schema,
-              t.recreate,
+              t.operation.getRecreate,
+              t.operation,
               t.name,
               t.curr_date_context,
               t.analyt_datecalc,

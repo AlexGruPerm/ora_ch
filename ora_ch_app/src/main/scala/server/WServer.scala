@@ -5,7 +5,7 @@ import clickhouse.{ chSess, jdbcChSession, jdbcChSessionImpl }
 import common.Types.MaxValAndCnt
 import error.ResponseMessage
 import ora.{ jdbcSession, jdbcSessionImpl, oraSessTask }
-import request.{ Parallel, ReqNewTask }
+import request.{ AppendByMax, AppendNotIn, AppendWhere, Parallel, Recreate, ReqNewTask, Update }
 import task.{ ImplTaskRepo, WsTask }
 import zio._
 import zio.http._
@@ -15,6 +15,7 @@ import calc.EncDecReqCalcImplicits._
 import common.{ SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _ }
 import connrepo.OraConnRepoImpl
 import table.Table
+
 import java.io.IOException
 import java.sql.SQLException
 
@@ -46,7 +47,7 @@ object WServer {
     errorMsg: String,
     updateFiber: Option[Fiber.Runtime[Exception, Long]],
     table: Table
-  ): ZIO[ImplTaskRepo, Throwable, Unit] =
+  ): ZIO[ImplTaskRepo, SQLException, Unit] =
     for {
       _    <- sess.setTaskError(errorMsg, table)
       repo <- ZIO.service[ImplTaskRepo]
@@ -60,6 +61,33 @@ object WServer {
       // updateFiber.get.interrupt.when(updateFiber.nonEmpty)
     } yield ()
 
+  private def getAppendKeys(
+    sess: oraSessTask,
+    sessCh: chSess,
+    table: Table
+  ): ZIO[ImplTaskRepo, SQLException, Option[List[Any]]] = for {
+    appendKeys <- table.operation match {
+                    case AppendNotIn =>
+                      ZIO.logDebug(
+                        s"AppendNotIn for ${table.fullTableName()} with arity = ${table.syncArity()}"
+                      ) *>
+                        (table.syncArity() match {
+                          case 1 => sessCh.whereAppendInt1(table)
+                          case 2 => sessCh.whereAppendInt2(table)
+                          case 3 => sessCh.whereAppendInt3(table)
+                          case _ => ZIO.succeed(None)
+                        }).refineToOrDie[SQLException]
+                          .tapError(er =>
+                            ZIO
+                              .logError(
+                                s"Error in one of sessCh.whereAppendIntX - ${er.getMessage}"
+                              ) *>
+                              saveError(sess, er.getMessage, None, table)
+                          )
+                    case _           => ZIO.succeed(None)
+                  }
+  } yield appendKeys
+
   private def copyTableEffect(
     taskId: Int,
     sess: oraSessTask,
@@ -70,24 +98,16 @@ object WServer {
   ): ZIO[ImplTaskRepo, Throwable, Long] = for {
     _            <- ZIO.logInfo(s"Begin copyTableEffect for ${table.name}")
     _            <- sess.setTableBeginCopy(table)
+    // Delete rows in ch before getMaxColForSync.
+    _            <- sessCh
+                      .deleteRowsFromChTable(table)
+                      .when(
+                        table.recreate == 0 &&
+                          table.operation == AppendWhere
+                      )
     maxValAndCnt <- sessCh.getMaxColForSync(table)
     _            <- ZIO.logDebug(s"maxValAndCnt = $maxValAndCnt")
-    arity         = table.syncArity()
-    _            <- ZIO.logDebug(s"arity = $arity")
-                   //issues_21 if "where_filter" is specified we don't use "sync_by_columns"
-    appendKeys   <- if (table.where_filter.isEmpty) {
-                    (arity match {
-                      case 1 => sessCh.whereAppendInt1(table)
-                      case 2 => sessCh.whereAppendInt2(table)
-                      case 3 => sessCh.whereAppendInt3(table)
-                      case _ => ZIO.succeed(None)
-                    }).refineToOrDie[SQLException]
-                      .tapError(er =>
-                        ZIO.logError(s"Error in one of sessCh.whereAppendIntX - ${er.getMessage}") *>
-                          saveError(sess, er.getMessage, None, table))
-    } else ZIO.none
-
-    _            <- ZIO.logDebug(s"appendKeys = $appendKeys")
+    appendKeys   <- getAppendKeys(sess, sessCh, table)
     fiberUpdCnt  <- updatedCopiedRowsCount(table, sess, sessCh, maxValAndCnt)
                       .delay(2.second)
                       .repeat(Schedule.spaced(5.second))
@@ -105,7 +125,7 @@ object WServer {
                       )
                       .refineToOrDie[SQLException]
     _            <- fiberUpdCnt.interrupt
-    _            <- sess.setTableCopied(table, rowCount, table.finishStatus())
+    _            <- sess.setTableCopied(table, rowCount)
     _            <-
       ZIO.logInfo(
         s"taskId=[$taskId] copyTableEffect Finished for table = ${table.name} with rowsCount = $rowCount"
@@ -132,7 +152,7 @@ object WServer {
               pkColList
             )
             .flatMap { rowCount =>
-              sess.setTableCopied(table, rowCount, table.finishStatus()) *>
+              sess.setTableCopied(table, rowCount) *>
                 sessCh.updateColumns(
                   table,
                   table.copy(name = s"upd_${table.name}"),
@@ -185,19 +205,25 @@ object WServer {
     fetch_size  = task.oraServer.map(_.fetch_size).getOrElse(1000)
     batch_size  = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
     copyEffects = task.tables.map { table =>
-                    oraSess.sessTask(Some(taskId)).flatMap { s =>
-                      (
-                        if (table.sync_update_by_column_max.nonEmpty)
-                          copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size) *>
-                            updateTableColumns(s, sessCh, table, fetch_size, batch_size)
-                        else if (table.update_fields.nonEmpty)
-                          updateTableColumns(s, sessCh, table, fetch_size, batch_size)
-                        else
-                          copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
-                      )
-                        .refineToOrDie[SQLException] *>
-                        closeSession(s, table)
-                    }
+                    ZIO.logInfo(s"OPERATION [${table.operation}] FOR ${table.fullTableName()}") *>
+                      oraSess.sessTask(Some(taskId)).flatMap { s =>
+                        (
+                          table.operation match {
+                            case Recreate    =>
+                              copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
+                            case AppendWhere =>
+                              copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
+                            case AppendByMax =>
+                              copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
+                            case AppendNotIn =>
+                              copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
+                            case Update      =>
+                              updateTableColumns(s, sessCh, table, fetch_size, batch_size)
+                          }
+                        )
+                          .refineToOrDie[SQLException] *>
+                          closeSession(s, table)
+                      }
                   }
     _          <- if (wstask.parDegree <= 2)
                     ZIO.logInfo(s"copyEffects SEQUENTIALLY with parDegree = ${wstask.parDegree}") *>

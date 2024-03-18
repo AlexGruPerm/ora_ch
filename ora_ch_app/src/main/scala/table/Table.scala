@@ -1,6 +1,7 @@
 package table
 
 import common.Types.OptString
+import request.OperType
 
 /**
  * Table or view
@@ -8,6 +9,7 @@ import common.Types.OptString
 case class Table(
   schema: String,
   recreate: Int = 0,
+  operation: OperType,
   name: String,
   curr_date_context: OptString,
   analyt_datecalc: OptString,
@@ -22,7 +24,6 @@ case class Table(
   sync_by_columns: OptString,
   sync_update_by_column_max: OptString
 ) {
-
   println(s"Table constr: $pk_columns - $only_columns - $notnull_columns")
 
   def syncArity(): Int =
@@ -50,13 +51,6 @@ case class Table(
     }
 
   def finishStatus(): String =
-    sync_by_column_max match {
-      case Some(_) => "finished_append"
-      case None    =>
-        update_fields match {
-          case Some(_) => "finished_update"
-          case None    => "finished"
-        }
-    }
+    s"finished_${operation.operStr}"
 
 }

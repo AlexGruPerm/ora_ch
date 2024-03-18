@@ -5,7 +5,7 @@ import conf.{ ClickhouseServer, OraServer }
 import zio.json.{ DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder }
 
 case class OneTable(
-  recreate: Int = 1,
+  operation: OperType,
   name: String,
   curr_date_context: OptString = Option.empty[String],
   analyt_datecalc: OptString = Option.empty[String],
@@ -19,37 +19,42 @@ case class OneTable(
   update_fields: OptString = Option.empty[String],
   sync_by_columns: OptString = Option.empty[String],
   sync_update_by_column_max: OptString = Option.empty[String]
-) {
-  if (recreate == 1 && sync_update_by_column_max.nonEmpty)
-    throw new Exception("recreate = 1 incompatible with non empty sync_update_by_column_max.")
+){
+  //println(s"... DEBUG [OneTable] $operation where_filter.isEmpty=${where_filter.isEmpty}")
+
+  if (operation == AppendWhere && where_filter.isEmpty)
+    throw new Exception(s"$operation incompatible with empty where_filter.")
+
+  if (operation == AppendByMax && sync_by_column_max.isEmpty)
+    throw new Exception(s"$operation incompatible with empty sync_by_column_max.")
+
+  if (operation.getRecreate == 1 && sync_update_by_column_max.nonEmpty)
+    throw new Exception(s"$operation incompatible with non empty sync_update_by_column_max.")
 
   if (sync_update_by_column_max.nonEmpty && update_fields.isEmpty)
-    throw new Exception(
-      "Non empty sync_update_by_column_max incompatible with empty update_fields."
-    )
+    throw new Exception("Non empty sync_update_by_column_max incompatible with empty update_fields.")
 
-  if (recreate == 1 && sync_by_columns.nonEmpty)
-    throw new Exception("recreate = 1 incompatible with non empty sync_by_column_max.")
+  if (operation.getRecreate == 1 && sync_by_columns.nonEmpty)
+    throw new Exception(s"$operation incompatible with non empty sync_by_column_max.")
 
-  if (recreate == 1 && sync_by_columns.nonEmpty)
-    throw new Exception("recreate = 1 incompatible with non empty sync_by_columns.")
+  if (operation.getRecreate == 1 && sync_by_columns.nonEmpty)
+    throw new Exception(s"$operation incompatible with non empty sync_by_columns.")
 
-  if (recreate == 1 && update_fields.nonEmpty)
-    throw new Exception("recreate = 1 incompatible with non empty update_fields.")
+  if (operation.getRecreate == 1 && update_fields.nonEmpty)
+    throw new Exception(s"$operation incompatible with non empty update_fields.")
 
   if (sync_by_columns.getOrElse("").split(",").length > 3)
     throw new Exception("sync_by_columns supports only up to three fields with Int type.")
 
   if (sync_by_columns.nonEmpty && sync_by_column_max.nonEmpty)
     throw new Exception("not empty sync_by_column_max incompatible with non empty sync_by_columns.")
-
 }
 
 case class SrcTable(schema: String, tables: List[OneTable])
 
 case class Servers(oracle: OraServer, clickhouse: ClickhouseServer)
 
-case class Parallel(degree: Int = 2 /*4*/ )
+case class Parallel(degree: Int = 2)
 
 case class ReqNewTask(
   servers: Servers,
@@ -69,6 +74,16 @@ case class ReqNewTask(
 }
 
 object EncDecReqNewTaskImplicits {
+
+  implicit val encoderOperType: JsonEncoder[OperType] = DeriveJsonEncoder.gen[OperType]
+  implicit val decoderOperType: JsonDecoder[OperType] = JsonDecoder[String].map {
+    case "recreate"     => Recreate
+    case "append_where" => AppendWhere
+    case "append_notin" => AppendNotIn
+    case "append_bymax" => AppendByMax
+    case "update" => Update
+    case anyValue => throw new Exception(s"Invalid value in field operation = $anyValue (decoderOperType)")
+  }
 
   implicit val encoderParallel: JsonEncoder[Parallel] = DeriveJsonEncoder.gen[Parallel]
   implicit val decoderParallel: JsonDecoder[Parallel] = DeriveJsonDecoder.gen[Parallel]
