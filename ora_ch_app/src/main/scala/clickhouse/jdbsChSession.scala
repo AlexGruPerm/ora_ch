@@ -80,6 +80,7 @@ case class chSess(sess: Connection, taskId: Int) {
 
   def getMaxValueByColCh(table: Table): ZIO[Any, SQLException, MaxValAndCnt] = for {
     maxVal <- ZIO.attemptBlockingInterrupt {
+
                 /**
                  * We have 2 append mode: 1) sync_by_column_max - single column In this case we need
                  * to know current maxVal. 2) sync_by_columns - by multiple fields. In this case

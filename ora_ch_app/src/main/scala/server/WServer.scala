@@ -174,63 +174,97 @@ object WServer {
   private def startTask(
     newtask: ReqNewTask
   ): ZIO[ImplTaskRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
-    _          <- ZIO.logDebug(s" newtask = $newtask")
-    oraSess    <- ZIO.service[jdbcSession]
-    repo       <- ZIO.service[ImplTaskRepo]
-    jdbcCh     <- ZIO.service[jdbcChSession]
-    sess       <- oraSess.sessTask()
-    taskId     <- sess.getTaskIdFromSess
-    _          <- repo.setTaskId(taskId)
-    t          <- sess.getTables(newtask.schemas)
-    wstask      = WsTask(
-                    id = taskId,
-                    state = TaskState(Ready, Option.empty[Table]),
-                    oraServer = Some(newtask.servers.oracle),
-                    clickhouseServer = Some(newtask.servers.clickhouse),
-                    parallel = newtask.parallel,
-                    tables = t,
-                    newtask.parallel.degree
-                  )
-    _          <- repo.create(wstask)
-    _          <- repo.setState(TaskState(Executing))
-    taskId     <- repo.getTaskId
-    sessCh     <- jdbcCh.sess(taskId)
-    task       <- repo.ref.get
-    setSchemas  = task.tables.map(_.schema).toSet diff Set("system", "default", "information_schema")
-    _          <- sess.saveTableList(task.tables).tapSomeError { case er: SQLException =>
-                    ZIO.logError(s"saveTableList ${er.getMessage}") *> repo.setState(TaskState(Wait))
-                  }
-    _          <- sessCh.createDatabases(setSchemas)
-    _          <- sess.setTaskState("executing")
-    fetch_size  = task.oraServer.map(_.fetch_size).getOrElse(1000)
-    batch_size  = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
-    copyEffects = task.tables.map { table =>
-                    ZIO.logInfo(s"OPERATION [${table.operation}] FOR ${table.fullTableName()}") *>
-                      oraSess.sessTask(Some(taskId)).flatMap { s =>
-                        (
-                          table.operation match {
-                            case Recreate    =>
-                              copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
-                            case AppendWhere =>
-                              copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
-                            case AppendByMax =>
-                              copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
-                            case AppendNotIn =>
-                              copyTableEffect(task.id, s, sessCh, table, fetch_size, batch_size)
-                            case Update      =>
-                              updateTableColumns(s, sessCh, table, fetch_size, batch_size)
-                          }
-                        )
-                          .refineToOrDie[SQLException] *>
-                          closeSession(s, table)
-                      }
-                  }
-    _          <- if (wstask.parDegree <= 2)
-                    ZIO.logInfo(s"copyEffects SEQUENTIALLY with parDegree = ${wstask.parDegree}") *>
-                      ZIO.collectAll(copyEffects)
-                  else
-                    ZIO.logInfo(s"copyEffects IN PARALLEL with parDegree = ${wstask.parDegree}") *>
-                      ZIO.collectAllPar(copyEffects).withParallelism(wstask.parDegree - 1)
+    _                       <- ZIO.logDebug(s" newtask = $newtask")
+    oraSess                 <- ZIO.service[jdbcSession]
+    repo                    <- ZIO.service[ImplTaskRepo]
+    jdbcCh                  <- ZIO.service[jdbcChSession]
+    sess                    <- oraSess.sessTask()
+    taskId                  <- sess.getTaskIdFromSess
+    _                       <- repo.setTaskId(taskId)
+    t                       <- sess.getTables(newtask.schemas)
+    wstask                   = WsTask(
+                                 id = taskId,
+                                 state = TaskState(Ready, Option.empty[Table]),
+                                 oraServer = Some(newtask.servers.oracle),
+                                 clickhouseServer = Some(newtask.servers.clickhouse),
+                                 parallel = newtask.parallel,
+                                 tables = t,
+                                 newtask.parallel.degree
+                               )
+    _                       <- repo.create(wstask)
+    _                       <- repo.setState(TaskState(Executing))
+    taskId                  <- repo.getTaskId
+    sessCh                  <- jdbcCh.sess(taskId)
+    task                    <- repo.ref.get
+    setSchemas               = task.tables.map(_.schema).toSet diff Set("system", "default", "information_schema")
+    _                       <- sess.saveTableList(task.tables).tapSomeError { case er: SQLException =>
+                                 ZIO.logError(s"saveTableList ${er.getMessage}") *> repo.setState(TaskState(Wait))
+                               }
+    _                       <- sessCh.createDatabases(setSchemas)
+    _                       <- sess.setTaskState("executing")
+    fetch_size               = task.oraServer.map(_.fetch_size).getOrElse(1000)
+    batch_size               = task.clickhouseServer.map(_.batch_size).getOrElse(1000)
+    // All operations excluding Update(s), updates must be executed after recreate and appends.
+    operationsExcludeUpdates = task.tables.filter(_.operation != Update).map { table =>
+                                 ZIO.logInfo(
+                                   s"OPERATION [${table.operation}] FOR ${table.fullTableName()}"
+                                 ) *>
+                                   oraSess.sessTask(Some(taskId)).flatMap { s =>
+                                     (
+                                       table.operation match {
+                                         // Later we can use matching here for adjustment logic.
+                                         case Recreate | AppendWhere | AppendByMax | AppendNotIn =>
+                                           copyTableEffect(
+                                             task.id,
+                                             s,
+                                             sessCh,
+                                             table,
+                                             fetch_size,
+                                             batch_size
+                                           )
+                                         case _                                                  => ZIO.succeed(0L)
+                                       }
+                                     )
+                                       .refineToOrDie[SQLException] *>
+                                       closeSession(s, table)
+                                   }
+                               }
+
+    // Only Updates
+    operationsUpdates        = task.tables.filter(_.operation == Update).map { table =>
+                                 ZIO.logInfo(
+                                   s"OPERATION [${table.operation}] FOR ${table.fullTableName()}"
+                                 ) *> oraSess.sessTask(Some(taskId)).flatMap { s =>
+                                   (
+                                     table.operation match {
+                                       case Update =>
+                                         updateTableColumns(s, sessCh, table, fetch_size, batch_size)
+                                       case _      => ZIO.succeed(0L)
+                                     }
+                                   )
+                                     .refineToOrDie[SQLException] *>
+                                     closeSession(s, table)
+                                 }
+                               }
+
+    _ <- if (wstask.parDegree <= 2)
+           ZIO.logInfo(
+             s"copyEffectsExcludeUpdates SEQUENTIALLY with parDegree = ${wstask.parDegree}"
+           ) *>
+             ZIO.collectAll(operationsExcludeUpdates)
+         else
+           ZIO.logInfo(
+             s"copyEffectsExcludeUpdates IN PARALLEL with parDegree = ${wstask.parDegree}"
+           ) *>
+             ZIO.collectAllPar(operationsExcludeUpdates).withParallelism(wstask.parDegree - 1)
+
+    _ <-
+      if (wstask.parDegree <= 2)
+        ZIO.logInfo(s"copyEffectsOnlyUpdates SEQUENTIALLY with parDegree = ${wstask.parDegree}") *>
+          ZIO.collectAll(operationsUpdates)
+      else
+        ZIO.logInfo(s"copyEffectsOnlyUpdates IN PARALLEL with parDegree = ${wstask.parDegree}") *>
+          ZIO.collectAllPar(operationsUpdates).withParallelism(wstask.parDegree - 1)
 
     _ <- repo.setState(TaskState(Wait))
     _ <- repo.clearTask

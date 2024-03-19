@@ -19,8 +19,11 @@ case class OneTable(
   update_fields: OptString = Option.empty[String],
   sync_by_columns: OptString = Option.empty[String],
   sync_update_by_column_max: OptString = Option.empty[String]
-){
-  //println(s"... DEBUG [OneTable] $operation where_filter.isEmpty=${where_filter.isEmpty}")
+) {
+  // println(s"... DEBUG [OneTable] $operation where_filter.isEmpty=${where_filter.isEmpty}")
+
+  if (operation == AppendNotIn  && sync_by_columns.isEmpty)
+    throw new Exception(s"$operation incompatible with empty sync_by_columns.")
 
   if (operation == AppendWhere && where_filter.isEmpty)
     throw new Exception(s"$operation incompatible with empty where_filter.")
@@ -32,7 +35,9 @@ case class OneTable(
     throw new Exception(s"$operation incompatible with non empty sync_update_by_column_max.")
 
   if (sync_update_by_column_max.nonEmpty && update_fields.isEmpty)
-    throw new Exception("Non empty sync_update_by_column_max incompatible with empty update_fields.")
+    throw new Exception(
+      "Non empty sync_update_by_column_max incompatible with empty update_fields."
+    )
 
   if (operation.getRecreate == 1 && sync_by_columns.nonEmpty)
     throw new Exception(s"$operation incompatible with non empty sync_by_column_max.")
@@ -81,8 +86,9 @@ object EncDecReqNewTaskImplicits {
     case "append_where" => AppendWhere
     case "append_notin" => AppendNotIn
     case "append_bymax" => AppendByMax
-    case "update" => Update
-    case anyValue => throw new Exception(s"Invalid value in field operation = $anyValue (decoderOperType)")
+    case "update"       => Update
+    case anyValue       =>
+      throw new Exception(s"Invalid value in field operation = $anyValue (decoderOperType)")
   }
 
   implicit val encoderParallel: JsonEncoder[Parallel] = DeriveJsonEncoder.gen[Parallel]

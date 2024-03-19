@@ -1,18 +1,26 @@
 package ora
 
-import calc.{VQParams, ViewQueryMeta}
+import calc.{ VQParams, ViewQueryMeta }
 import column.OraChColumn
-import zio.{Task, ZIO, _}
+import zio.{ Task, ZIO, _ }
 import conf.OraServer
 import oracle.jdbc.OracleDriver
-import request.{AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable}
+import request.{ AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable }
 import table.Table
 
-import java.sql.{Clob, Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Statement}
+import java.sql.{
+  Clob,
+  Connection,
+  DriverManager,
+  PreparedStatement,
+  ResultSet,
+  SQLException,
+  Statement
+}
 import java.util.Properties
 import common.Types._
 import OraChColumn._
-import common.{ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum}
+import common.{ ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum }
 import connrepo.OraConnRepoImpl
 
 sealed trait oraSess {
@@ -337,17 +345,18 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
     maxColCh: Option[MaxValAndCnt],
     appendKeys: Option[List[Any]] = Option.empty[List[Any]]
   ): ZIO[Any, SQLException, ResultSet] = for {
-    sid         <- ZIO.attemptBlockingInterrupt {
-                     getPid
-                   }.tapError(er => ZIO.logError(er.getMessage))
-                     .refineToOrDie[SQLException]
-    _           <-
+    sid <- ZIO.attemptBlockingInterrupt {
+             getPid
+           }.tapError(er => ZIO.logError(er.getMessage))
+             .refineToOrDie[SQLException]
+    _   <-
       ZIO.attemptBlockingInterrupt {
         val query: String =
           s""" update ora_to_ch_tasks_tables t
              |   set  ora_sid      = $sid
              | where t.id_task     = $taskId and
              |       t.schema_name = '${table.schema}' and
+             |       t.operation   = '${table.operation.operStr}' and
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         sess.setClientInfo("OCSID.MODULE", "ORATOCH")
@@ -361,7 +370,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
       ZIO.logDebug(
         s"getDataResultSet sid=$sid arity = ${table.syncArity()} appendKeys.nonEmpty = ${appendKeys.nonEmpty}"
       )*/
-    _           <-
+    _   <-
       ZIO.logInfo(s"getDataResultSet maxColCh.CntRows = ${maxColCh.map(_.CntRows).getOrElse(0L)}")
 
     rsWithQuery <- ZIO.attemptBlockingInterrupt {
@@ -369,30 +378,33 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                      val dataQuery             =
                        s""" select /*+ ALL_ROWS */ ${table.only_columns.getOrElse("*")} from ${table
                            .fullTableName()} ${table.operation match {
-                         case Recreate => s"${table.where_filter.map(where_filter =>s" where $where_filter").getOrElse(" ")}"
-                         case AppendWhere =>
-                           table.where_filter match {
-                             case Some(wf) => s" where $wf"
-                             case None => " "
-                           }
-                         case AppendByMax =>
-                           (table.where_filter,maxColCh.map(_.MaxValue)) match {
-                             case (Some(wf),Some(maxId)) => s" where $wf and ${table.sync_by_column_max.getOrElse("X")} > $maxId "
-                             case (Some(wf),None)        => s" where $wf "
-                             case (None,Some(maxId))     => s" where ${table.sync_by_column_max.getOrElse("X")} > $maxId "
-                             case (None,None)            => " "
-                           }
-                         //in this case we don't add where_filter, you can use AppendWhere.
-                         case AppendNotIn => s" where $whereByFields "
-                         case _ => " "
+                           case Recreate    =>
+                             s"${table.where_filter.map(where_filter => s" where $where_filter").getOrElse(" ")}"
+                           case AppendWhere =>
+                             table.where_filter match {
+                               case Some(wf) => s" where $wf"
+                               case None     => " "
+                             }
+                           case AppendByMax =>
+                             (table.where_filter, maxColCh.map(_.MaxValue)) match {
+                               case (Some(wf), Some(maxId)) =>
+                                 s" where $wf and ${table.sync_by_column_max.getOrElse("X")} > $maxId "
+                               case (Some(wf), None)        => s" where $wf "
+                               case (None, Some(maxId))     =>
+                                 s" where ${table.sync_by_column_max.getOrElse("X")} > $maxId "
+                               case (None, None)            => " "
+                             }
+                           // in this case we don't add where_filter, you can use AppendWhere.
+                           case AppendNotIn => s" where $whereByFields "
+                           case _           => " "
                          }}
           ${table.ins_select_order_by.map(order => s" order by $order ").getOrElse(" ")}
         """.stripMargin
 
-                    println(s"DEBUG_QUERY = $dataQuery")
+                     println(s"DEBUG_QUERY = $dataQuery")
 
                      setContext(table)
-                     val dataRs                = sess
+                     val dataRs = sess
                        .createStatement(
                          java.sql.ResultSet.TYPE_FORWARD_ONLY,
                          ResultSet.CONCUR_READ_ONLY
@@ -405,9 +417,10 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                        ZIO.logError(
                          s"Exception: ${er.getMessage} curr_date_context=${table.curr_date_context}"
                        ),
-                     rsq => ZIO.logDebug(s" >>>>>>>>>>>>>   getDataResultSet select = ${rsq.query} ")
+                     rsq =>
+                       ZIO.logDebug(s" >>>>>>>>>>>>>   getDataResultSet select = ${rsq.query} ")
                    ).refineToOrDie[SQLException]
-    _ <- ZIO.logInfo(s"ORACLE getDataResultSet, QUERY = ${rsWithQuery.query}")
+    _           <- ZIO.logInfo(s"ORACLE getDataResultSet, QUERY = ${rsWithQuery.query}")
   } yield rsWithQuery.rs
 
   /**
@@ -443,7 +456,8 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
     saveTablesEffects = tables.map { t =>
                           ZIO.attemptBlockingInterrupt {
                             val query: String =
-                              s"insert into ora_to_ch_tasks_tables(id_task,schema_name,table_name) values($taskId,'${t.schema}','${t.name}') "
+                              s"insert into ora_to_ch_tasks_tables(id,id_task,schema_name,table_name,operation) " +
+                                s" values(s_ora_to_ch_tasks_tables.nextval, $taskId,'${t.schema}','${t.name}','${t.operation.operStr}') "
                             val rs: ResultSet = sess.createStatement.executeQuery(query)
                             sess.commit()
                             rs.close()
@@ -487,6 +501,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                |    end_datetime = sysdate
                | where t.id_task     = $taskId and
                |       t.schema_name = '${table.schema}' and
+               |       t.operation   = '${table.operation.operStr}' and
                |       t.table_name  = '${table.name}'
           """.stripMargin
           )
@@ -511,6 +526,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
              |        ora_sid        = $sid
              | where t.id_task     = $taskId and
              |       t.schema_name = '${table.schema}' and
+             |       t.operation   = '${table.operation.operStr}' and
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         sess.setClientInfo("OCSID.MODULE", "ORATOCH")
@@ -536,6 +552,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
              |                               end)
              | where t.id_task     = $taskId and
              |       t.schema_name = '${table.schema}' and
+             |       t.operation   = '${table.operation.operStr}' and
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
         sess.commit()
@@ -562,6 +579,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                |                               end)
                | where t.id_task     = $taskId and
                |       t.schema_name = '${table.schema}' and
+               |       t.operation   = '${table.operation.operStr}' and
                |       t.table_name  = '${table.name}' """.stripMargin
           val rs: ResultSet = sess.createStatement.executeQuery(query)
           sess.commit()
@@ -662,7 +680,6 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
                    val conn                 = oraConn
                    conn.setAutoCommit(false)
                    conn.setClientInfo("OCSID.MODULE", "ORATOCH")
-                   // todo: remove inserting ora_sid in parallel mode, or remove this filed into ora_to_ch_tasks_tables
                    val query: String        =
                      "insert into ora_to_ch_tasks (id,ora_sid) values (s_ora_to_ch_tasks.nextval,sys_context('USERENV','SID'))"
                    val idCol: Array[String] = Array("ID")
