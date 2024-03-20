@@ -22,7 +22,7 @@ case class OneTable(
 ) {
   // println(s"... DEBUG [OneTable] $operation where_filter.isEmpty=${where_filter.isEmpty}")
 
-  if (operation == AppendNotIn  && sync_by_columns.isEmpty)
+  if (operation == AppendNotIn && sync_by_columns.isEmpty)
     throw new Exception(s"$operation incompatible with empty sync_by_columns.")
 
   if (operation == AppendWhere && where_filter.isEmpty)
