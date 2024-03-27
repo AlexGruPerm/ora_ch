@@ -7,7 +7,6 @@ case class VQParams(
 )
 
 case class ViewQueryMeta(
-  viewName: Option[String],
   chTable: String,
   oraTable: String,
   query: Option[String],

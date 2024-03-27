@@ -1,18 +1,18 @@
 package server
 
-import calc.{ CalcLogic, ImplCalcRepo, ReqCalcSrc }
-import clickhouse.{ chSess, jdbcChSession, jdbcChSessionImpl }
+import calc.{CalcLogic, ImplCalcRepo, ReqCalc, ReqCalcSrc}
+import clickhouse.{chSess, jdbcChSession, jdbcChSessionImpl}
 import common.Types.MaxValAndCnt
 import error.ResponseMessage
-import ora.{ jdbcSession, jdbcSessionImpl, oraSessTask }
-import request.{ AppendByMax, AppendNotIn, AppendWhere, Parallel, Recreate, ReqNewTask, Update }
-import task.{ ImplTaskRepo, WsTask }
+import ora.{jdbcSession, jdbcSessionImpl, oraSessTask}
+import request.{AppendByMax, AppendNotIn, AppendWhere, Parallel, Recreate, ReqNewTask, Update}
+import task.{ImplTaskRepo, WsTask}
 import zio._
 import zio.http._
-import zio.json.{ DecoderOps, EncoderOps, JsonDecoder }
+import zio.json.{DecoderOps, EncoderOps, JsonDecoder}
 import request.EncDecReqNewTaskImplicits._
 import calc.EncDecReqCalcImplicits._
-import common.{ SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _ }
+import common.{SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _}
 import connrepo.OraConnRepoImpl
 import table.Table
 
@@ -222,7 +222,7 @@ object WServer {
                                              fetch_size,
                                              batch_size
                                            )
-                                         case _                                                  => ZIO.succeed(0L)
+                                         case _ => ZIO.succeed(0L)
                                        }
                                      )
                                        .refineToOrDie[SQLException] *>
@@ -239,7 +239,7 @@ object WServer {
                                      table.operation match {
                                        case Update =>
                                          updateTableColumns(s, sessCh, table, fetch_size, batch_size)
-                                       case _      => ZIO.succeed(0L)
+                                       case _ => ZIO.succeed(0L)
                                      }
                                    )
                                      .refineToOrDie[SQLException] *>
@@ -307,12 +307,12 @@ object WServer {
     for {
       repo       <- ZIO.service[ImplCalcRepo]
       currStatus <- repo.getState
-      taskId     <- repo.getCalcId
+      //taskId     <- repo.getCalcId
       _          <- ZIO.logInfo(s"Repo currStatus = ${currStatus.state}")
       _          <- ZIO
                       .fail(
                         new Exception(
-                          s" already running id = $taskId ,look at tables: ora_to_ch_views_query_log"
+                          s" already running, look at tables: ora_to_ch_query_log"
                         )
                       )
                       .when(currStatus.state != Wait)
@@ -389,26 +389,59 @@ object WServer {
                 }
   } yield response
 
+  private def executeCalcAndCopy(reqCalc: ReqCalcSrc):
+  ZIO[ImplCalcRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
+    _ <- ZIO.logInfo(s"executeCalcAndCopy for reqCalc = ${reqCalc.queries.map(_.query_id).toString()}")
+    oraSess <- ZIO.service[jdbcSession]
+    queries <- ZIO.succeed(reqCalc.queries)
+    repo <- ZIO.service[ImplCalcRepo]
+    repoState <- repo.getState
+    _ <- ZIO.logInfo(s"repo state = $repoState")
+
+    /**
+     * We can't use parallel calculation because
+     * For the same query_id we have one table ch_ and ora_
+     * It can case when on session is inserting rows into ch_ or ora_ table and
+     * another one is truncating.
+     * In the future we can divide all Queries on distinct groups by query_id
+     * F.e. (1,2,2,1,1,2,3,1) into
+     *      (1,2)(2,1)(1,2)(3,1) and execute calculation parallel by groups and
+     *      go by groups sequentially.
+    */
+    calcsEffects = queries.map(query =>
+      oraSess.sessCalc(debugMsg = "calc - copyDataChOra").flatMap{s =>
+        CalcLogic.getCalcMeta(query,s).flatMap {meta =>
+            CalcLogic.startCalculation(query, meta, s, reqCalc.id_reload_calc).flatMap{queryLogId =>
+              CalcLogic.copyDataChOra(query, meta, s, queryLogId)}
+        }
+      }
+    )
+    _ <- ZIO.collectAll(calcsEffects)
+    //_ <- ZIO.collectAllPar(calcsEffects).withParallelism(2)
+    _ <- repo.clearCalc
+  } yield ()
+
   private def calcAndCopy(
-    reqCalc: ReqCalcSrc,
-    waitSeconds: Int
+    reqCalc: ReqCalcSrc//,
+    //waitSeconds: Int
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo   <- ZIO.service[ImplCalcRepo]
     _      <- currStatusCheckerCalc()
-    meta    = CalcLogic.getCalcMeta(reqCalc)
-    _      <- meta.flatMap { m =>
-                CalcLogic.startCalculation(reqCalc, m) *>
-                  CalcLogic.copyDataChOra(reqCalc, m)
-              }
-                .provide(
-                  OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(), "Ucp_calc"),
+    _ <- repo.create(ReqCalc(id = 111222333)) //todo: put here ora_to_ch_reload_calc.ID
+    _ <- repo.setState(CalcState(Executing))
+    /**
+     * We can't use parallel execution, look description in executeCalcAndCopy
+     */
+    _      <- executeCalcAndCopy(reqCalc).provide(
+                  OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(degree = 1), "Ucp_calc"),
                   ZLayer.succeed(repo),
                   ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
                   ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
                   ZLayer.succeed(SessCalc)
                 )
                 .forkDaemon
-    sched   = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
+
+   /* sched   = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
     calcId <-
       repo
         .getCalcId
@@ -417,12 +450,12 @@ object WServer {
           sched,
           (_: String, _: (Long, Long)) =>
             ZIO.fail(new Exception(s"Elapsed wait time $waitSeconds seconds of getting calcId"))
-        )
-  } yield Response.json(s"""{"calcId":"$calcId"}""").status(Status.Ok)
+        )*/
+  } yield Response.json(s"""{"calcId":"ok"}""").status(Status.Ok)
 
   private def calc(
-    req: Request,
-    waitSeconds: Int
+    req: Request//,
+    //waitSeconds: Int
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     // bodyText <- req.body.asString
     // _        <- ZIO.logDebug(s"calc body = $bodyText")
@@ -430,7 +463,7 @@ object WServer {
     _        <- ZIO.logDebug(s"JSON = $reqCalcE")
     resp     <- reqCalcE match {
                   case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
-                  case Right(src)    => calcAndCopy(src, waitSeconds)
+                  case Right(src)    => calcAndCopy(src/*, waitSeconds*/)
                 }
   } yield resp
 
@@ -454,7 +487,7 @@ object WServer {
         catchCover(task(req, waitSeconds).provideSome[ImplTaskRepo](ZLayer.succeed(SessTask)))
       },
       Method.POST / "calc"  -> handler { (req: Request) =>
-        catchCover(calc(req, waitSeconds).provideSome[ImplCalcRepo](ZLayer.succeed(SessCalc)))
+        catchCover(calc(req/*, waitSeconds*/).provideSome[ImplCalcRepo](ZLayer.succeed(SessCalc)))
       },
       Method.GET / "random" -> handler(Random.nextString(10).map(Response.text(_))),
       Method.GET / "utc"    -> handler(Clock.currentDateTime.map(s => Response.text(s.toString))),
