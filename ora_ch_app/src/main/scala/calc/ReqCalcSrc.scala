@@ -9,7 +9,7 @@ case class CalcParams(name: String, value: String)
 
 case class Query(query_id: Int, params: Set[CalcParams]) {
   def paramByName(pName: String): String =
-    params.find(_.name == pName).getOrElse(CalcParams(pName, "*")).value
+    params.find(_.name == pName).getOrElse(CalcParams(pName, "*")).value.trim
 }
 
 case class ReqCalcSrc(

@@ -1,18 +1,26 @@
 package ora
 
-import calc.{Query, VQParams, ViewQueryMeta}
+import calc.{ Query, VQParams, ViewQueryMeta }
 import column.OraChColumn
-import zio.{Task, ZIO, _}
+import zio.{ Task, ZIO, _ }
 import conf.OraServer
 import oracle.jdbc.OracleDriver
-import request.{AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable}
+import request.{ AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable }
 import table.Table
 
-import java.sql.{Clob, Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Statement}
+import java.sql.{
+  Clob,
+  Connection,
+  DriverManager,
+  PreparedStatement,
+  ResultSet,
+  SQLException,
+  Statement
+}
 import java.util.Properties
 import common.Types._
 import OraChColumn._
-import common.{ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum}
+import common.{ ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum }
 import connrepo.OraConnRepoImpl
 
 sealed trait oraSess {
@@ -43,8 +51,8 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
   } yield sid
 
   /**/
-  def insertViewQueryLog(q: Query,id_reload_calc: Int): ZIO[Any, SQLException, Int] = for {
-    _ <- ZIO.logInfo(s" insertViewQueryLog for idVq = ${q.query_id}")
+  def insertViewQueryLog(q: Query, id_reload_calc: Int): ZIO[Any, SQLException, Int] = for {
+    _  <- ZIO.logInfo(s" insertViewQueryLog for idVq = ${q.query_id}")
     id <- ZIO.attemptBlockingInterrupt {
             val query: String        =
               s""" insert into ora_to_ch_query_log(id,id_vq,ora_sid,begin_calc,state,
@@ -66,7 +74,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
             sess.setClientInfo("OCSID.ACTION", s"calc_$id")
             sess.commit()
             insertVqLog.close()
-            //sess.close()//todo: remove todo 0
+            // sess.close()//todo: remove todo 0
             id
           }.tapError(er => ZIO.logError(er.getMessage))
             .refineToOrDie[SQLException]
@@ -86,7 +94,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            rs.next()
            sess.commit()
            rs.close()
-           //sess.close()
+           // sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -119,7 +127,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val rs: ResultSet = sess.createStatement.executeQuery(query)
            sess.commit()
            rs.close()
-           //sess.close()//todo: remove todo #2
+           // sess.close()//todo: remove todo #2
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -131,7 +139,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val rs: ResultSet = sess.createStatement.executeQuery(query)
            sess.commit()
            rs.close()
-           //sess.close() //todo: remove todo #3
+           // sess.close() //todo: remove todo #3
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -145,10 +153,10 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                 |       l.ora_ch_calc_dates_id =
                 |       (select cd.id
                 |          from ora_ch_calc_dates cd
-                |         where cd.id_reload_calc  = l.id_reload_calc and
-                |               cd.id_query        = l.id_vq and
-                |               cd.calc_begin_date = to_number(replace(l.analyt_datecalc,'-',''))  and
-                |               cd.calc_for_date   = to_number(replace(l.curr_date_context,'-','')))
+                |         where cd.id_reload_calc    = l.id_reload_calc and
+                |               cd.id_query          = l.id_vq and
+                |               cd.analyt_datecalc   = to_number(replace(l.analyt_datecalc,'-',''))  and
+                |               cd.curr_date_context = to_number(replace(l.curr_date_context,'-','')))
                 | where l.id = $id
                 | """.stripMargin
            val rs: ResultSet = sess.createStatement.executeQuery(query)
@@ -161,52 +169,52 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
 
   def getQueryMeta(queryId: Int): ZIO[Any, SQLException, ViewQueryMeta] = for {
     queryMeta <- ZIO.attemptBlockingInterrupt {
-                val queryVq                 =
-                  s""" select vq.ch_table,vq.ora_table,vq.query_text,vq.ch_schema,vq.ora_schema
-                     |  from ora_to_ch_query vq
-                     | where vq.id = $queryId """.stripMargin
-                val rsVq: ResultSet         = sess.createStatement.executeQuery(queryVq)
-                rsVq.next()
-                val queryParams             =
-                  s""" select p.param_name,p.param_type,p.param_order
-                     |  from ora_to_ch_query_params p
-                     | where p.id_vq = $queryId """.stripMargin
-                val rsParams: ResultSet     = sess.createStatement.executeQuery(queryParams)
-                val vqParams: Set[VQParams] = Iterator
-                  .continually(rsParams)
-                  .takeWhile(_.next())
-                  .map { rs =>
-                    VQParams(
-                      rs.getString("param_name"),
-                      rs.getString("param_type"),
-                      rs.getInt("param_order")
-                    )
-                  }
-                  .toSet
+                   val queryVq                 =
+                     s""" select vq.ch_table,vq.ora_table,vq.query_text,vq.ch_schema,vq.ora_schema
+                        |  from ora_to_ch_query vq
+                        | where vq.id = $queryId """.stripMargin
+                   val rsVq: ResultSet         = sess.createStatement.executeQuery(queryVq)
+                   rsVq.next()
+                   val queryParams             =
+                     s""" select p.param_name,p.param_type,p.param_order
+                        |  from ora_to_ch_query_params p
+                        | where p.id_vq = $queryId """.stripMargin
+                   val rsParams: ResultSet     = sess.createStatement.executeQuery(queryParams)
+                   val vqParams: Set[VQParams] = Iterator
+                     .continually(rsParams)
+                     .takeWhile(_.next())
+                     .map { rs =>
+                       VQParams(
+                         rs.getString("param_name"),
+                         rs.getString("param_type"),
+                         rs.getInt("param_order")
+                       )
+                     }
+                     .toSet
 
-                val queryClob: Clob             = rsVq.getClob("query_text")
-                val isNull: Boolean             = rsVq.wasNull()
-                val optQueryStr: Option[String] =
-                  if (isNull)
-                    None
-                  else
-                    Some(queryClob.getSubString(1, queryClob.length().toInt))
+                   val queryClob: Clob             = rsVq.getClob("query_text")
+                   val isNull: Boolean             = rsVq.wasNull()
+                   val optQueryStr: Option[String] =
+                     if (isNull)
+                       None
+                     else
+                       Some(queryClob.getSubString(1, queryClob.length().toInt))
 
-                val vqm = ViewQueryMeta(
-                  rsVq.getString("ch_table"),
-                  rsVq.getString("ora_table"),
-                  optQueryStr,
-                  vqParams,
-                  rsVq.getString("ch_schema"),
-                  rsVq.getString("ora_schema")
-                )
-                rsVq.close()
-                rsParams.close()
+                   val vqm = ViewQueryMeta(
+                     rsVq.getString("ch_table"),
+                     rsVq.getString("ora_table"),
+                     optQueryStr,
+                     vqParams,
+                     rsVq.getString("ch_schema"),
+                     rsVq.getString("ora_schema")
+                   )
+                   rsVq.close()
+                   rsParams.close()
 
-                //sess.close()
-                vqm
-              }.tapError(er => ZIO.logError(er.getMessage))
-                .refineToOrDie[SQLException]
+                   // sess.close()
+                   vqm
+                 }.tapError(er => ZIO.logError(er.getMessage))
+                   .refineToOrDie[SQLException]
   } yield queryMeta
 
   private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
@@ -285,7 +293,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
               ps.executeBatch()
               sess.commit()
               rs.close()
-              //sess.close()
+              // sess.close()
             }.tapError(er => ZIO.logError(er.getMessage))
               .refineToOrDie[SQLException]
   } yield ()

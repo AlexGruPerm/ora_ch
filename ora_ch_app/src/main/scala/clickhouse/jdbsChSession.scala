@@ -527,7 +527,7 @@ case class chSess(sess: Connection, taskId: Int) {
   ): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
            val mapCalcParams: Map[String, String] =
-             calcParams.iterator.map(p => p.name -> p.value).toMap
+             calcParams.iterator.map(p => p.name -> p.value.trim).toMap
            val strQuery: String                   = meta.query.getOrElse(" ")
            val selectQuery: String                =
              meta.params.toList.sortBy(_.ord).foldLeft(strQuery) { case (r, c) =>
