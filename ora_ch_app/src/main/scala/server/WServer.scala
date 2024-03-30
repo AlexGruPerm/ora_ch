@@ -357,8 +357,12 @@ object WServer {
                     for {
                       repo            <- ZIO.service[ImplTaskRepo]
                       _               <- currStatusCheckerTask()
-                      layerOraConnRepo =
-                        OraConnRepoImpl.layer(newTask.servers.oracle, newTask.parallel, "Ucp_task")
+                      layerOraConnRepo = // plus1 - 1 session for updates.
+                        OraConnRepoImpl.layer(
+                          newTask.servers.oracle,
+                          newTask.parallel.plus1,
+                          "Ucp_task"
+                        )
                       taskEffect       = startTask(newTask)
                                            .provide(
                                              layerOraConnRepo,
@@ -435,14 +439,6 @@ object WServer {
     _         <- ZIO.logInfo(s"repo state = $repoState")
 
     /**
-     * We can't use parallel calculation because For the same query_id we have one table ch_ and
-     * ora_ It can case when on session is inserting rows into ch_ or ora_ table and another one is
-     * truncating. In the future we can divide all Queries on distinct groups by query_id F.e.
-     * (1,2,2,1,1,2,3,1) into (1,2)(2,1)(1,2)(3,1) and execute calculation parallel by groups and go
-     * by groups sequentially.
-     */
-
-    /**
      * TODO: old algo of simple seq executions. calcsEffects = queries.map(query =>
      * oraSess.sessCalc(debugMsg = "calc - copyDataChOra").flatMap { s =>
      * CalcLogic.getCalcMeta(query, s).flatMap { meta => CalcLogic.startCalculation(query, meta, s,
@@ -484,11 +480,12 @@ object WServer {
     _    <- repo.create(ReqCalc(id = 111222333)) // todo: put here ora_to_ch_reload_calc.ID
     _    <- repo.setState(CalcState(Executing))
     /**
-     * We can't use parallel execution, look description in executeCalcAndCopy
+     * We can use parallel execution only with degree =2. Because listOfListsQuery(mapOfQueues
+     * algorithm make List of lists Query, List.size=2 Parallel(degree = 2)
      */
     _    <- executeCalcAndCopy(reqCalc)
               .provide(
-                OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(degree = 1), "Ucp_calc"),
+                OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(degree = 2), "Ucp_calc"),
                 ZLayer.succeed(repo),
                 ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
                 ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,

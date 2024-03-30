@@ -59,7 +59,9 @@ case class SrcTable(schema: String, tables: List[OneTable])
 
 case class Servers(oracle: OraServer, clickhouse: ClickhouseServer)
 
-case class Parallel(degree: Int = 2)
+case class Parallel(degree: Int = 2) {
+  def plus1: Parallel = Parallel(degree + 1)
+}
 
 case class ReqNewTask(
   servers: Servers,
