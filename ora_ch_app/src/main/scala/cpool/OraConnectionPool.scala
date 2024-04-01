@@ -17,7 +17,7 @@ class OraConnectionPool(conf: OraServer, par: Parallel, poolName: String) {
   pool.setUser(conf.user)
   pool.setPassword(conf.password)
   pool.setConnectionPoolName(poolName)
-  pool.setConnectionWaitTimeout(30)
+  pool.setConnectionWaitTimeout(30) // 30
   pool.setInitialPoolSize(par.degree)
   // A connection pool always tries to return to the minimum pool size
   pool.setMinPoolSize(par.degree)

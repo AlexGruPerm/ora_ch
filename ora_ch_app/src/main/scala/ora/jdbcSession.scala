@@ -373,11 +373,6 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         rs.close()
       }.tapError(er => ZIO.logError(er.getMessage))
         .refineToOrDie[SQLException]
-
-    /*    _           <-
-      ZIO.logDebug(
-        s"getDataResultSet sid=$sid arity = ${table.syncArity()} appendKeys.nonEmpty = ${appendKeys.nonEmpty}"
-      )*/
     _   <-
       ZIO.logInfo(s"getDataResultSet maxColCh.CntRows = ${maxColCh.map(_.CntRows).getOrElse(0L)}")
 
@@ -438,12 +433,12 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
    * where_filter - filter when select from oracle table. ins_select_order_by
    */
   def getDataResultSetForUpdate(
-    table: Table,
-    fetch_size: Int,
-    pkColumns: List[String]
+                                 table: Table,
+                                 fetch_size: Int,
+                                 primaryKeyColumnsCh: List[String]
   ): ZIO[Any, SQLException, ResultSet] = for {
     _            <- ZIO.unit
-    selectColumns = s"${pkColumns.mkString(",")},${table.updateColumns()} "
+    selectColumns = s"${primaryKeyColumnsCh.mkString(",")},${table.updateColumns()} "
     rs           <- ZIO.attemptBlockingInterrupt {
                       val dataQuery                =
                         s"select /*+ ALL_ROWS */ $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
@@ -545,9 +540,10 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         .refineToOrDie[SQLException]
   } yield ()
 
-  def updateCountCopiedRows(table: Table, rowCount: Long): ZIO[Any, Nothing, Long] = for {
+  def updateCountCopiedRows(table: Table, rowCount: Long, oper: String): ZIO[Any, Nothing, Long] = for {
     taskId <- getTaskIdFromSess
     // _ <- ZIO.logInfo(s"updateCountCopiedRows ${table.fullTableName()} taskId=$taskId rowCount=$rowCount")
+    //isSessAvail <- ZIO.attemptBlockingInterrupt {sess.isClosed}
     rows   <-
       ZIO.attemptBlockingInterrupt {
         val query: String =
@@ -563,10 +559,11 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
              |       t.operation   = '${table.operation.operStr}' and
              |       t.table_name  = '${table.name}' """.stripMargin
         val rs: ResultSet = sess.createStatement.executeQuery(query)
+          sess.setClientInfo("OCSID.ACTION", s"UCNT_$oper-$rowCount") // todo: check it for 32 symbols table name
         sess.commit()
         rs.close()
         rowCount
-      }.tapError(er => ZIO.logError(er.getMessage))
+      }/*.when(isSessAvail)*/.tapError(er => ZIO.logError(er.getMessage))
         .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
   } yield rows
 

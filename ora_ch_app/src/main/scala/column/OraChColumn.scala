@@ -57,7 +57,11 @@ object OraChColumn {
         case _          => "UNDEFINED_COL_TYPE"
       }
 
-    val clColumnString: String = s"$name $nnLeftSide$getChCol$nnRightSide "
+    val clColumnString: String =s"$name $nnLeftSide$getChCol$nnRightSide "
+   /*   if (nnLeftSide=="Nullable(")
+        s"$name $nnLeftSide$getChCol$nnRightSide default null "
+      else
+        s"$name $nnLeftSide$getChCol$nnRightSide "*/
 
     println(s"OraChColumn.apply clColumnString = $clColumnString")
 
