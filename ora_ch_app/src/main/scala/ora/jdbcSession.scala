@@ -433,9 +433,9 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
    * where_filter - filter when select from oracle table. ins_select_order_by
    */
   def getDataResultSetForUpdate(
-                                 table: Table,
-                                 fetch_size: Int,
-                                 primaryKeyColumnsCh: List[String]
+    table: Table,
+    fetch_size: Int,
+    primaryKeyColumnsCh: List[String]
   ): ZIO[Any, SQLException, ResultSet] = for {
     _            <- ZIO.unit
     selectColumns = s"${primaryKeyColumnsCh.mkString(",")},${table.updateColumns()} "
@@ -540,32 +540,37 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         .refineToOrDie[SQLException]
   } yield ()
 
-  def updateCountCopiedRows(table: Table, rowCount: Long, oper: String): ZIO[Any, Nothing, Long] = for {
-    taskId <- getTaskIdFromSess
-    // _ <- ZIO.logInfo(s"updateCountCopiedRows ${table.fullTableName()} taskId=$taskId rowCount=$rowCount")
-    //isSessAvail <- ZIO.attemptBlockingInterrupt {sess.isClosed}
-    rows   <-
-      ZIO.attemptBlockingInterrupt {
-        val query: String =
-          s""" update ora_to_ch_tasks_tables t
-             |   set copied_records_count = $rowCount,
-             |             speed_rows_sec = (case
-             |                                when ((sysdate - t.begin_datetime)*24*60*60) != 0
-             |                                then round($rowCount/((sysdate - t.begin_datetime)*24*60*60))
-             |                                else $rowCount
-             |                               end)
-             | where t.id_task     = $taskId and
-             |       t.schema_name = '${table.schema}' and
-             |       t.operation   = '${table.operation.operStr}' and
-             |       t.table_name  = '${table.name}' """.stripMargin
-        val rs: ResultSet = sess.createStatement.executeQuery(query)
-          sess.setClientInfo("OCSID.ACTION", s"UCNT_$oper-$rowCount") // todo: check it for 32 symbols table name
-        sess.commit()
-        rs.close()
-        rowCount
-      }/*.when(isSessAvail)*/.tapError(er => ZIO.logError(er.getMessage))
-        .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
-  } yield rows
+  def updateCountCopiedRows(table: Table, rowCount: Long, oper: String): ZIO[Any, Nothing, Long] =
+    for {
+      taskId <- getTaskIdFromSess
+      // _ <- ZIO.logInfo(s"updateCountCopiedRows ${table.fullTableName()} taskId=$taskId rowCount=$rowCount")
+      // isSessAvail <- ZIO.attemptBlockingInterrupt {sess.isClosed}
+      rows   <-
+        ZIO.attemptBlockingInterrupt {
+          val query: String =
+            s""" update ora_to_ch_tasks_tables t
+               |   set copied_records_count = $rowCount,
+               |             speed_rows_sec = (case
+               |                                when ((sysdate - t.begin_datetime)*24*60*60) != 0
+               |                                then round($rowCount/((sysdate - t.begin_datetime)*24*60*60))
+               |                                else $rowCount
+               |                               end)
+               | where t.id_task     = $taskId and
+               |       t.schema_name = '${table.schema}' and
+               |       t.operation   = '${table.operation.operStr}' and
+               |       t.table_name  = '${table.name}' """.stripMargin
+          val rs: ResultSet = sess.createStatement.executeQuery(query)
+          sess.setClientInfo(
+            "OCSID.ACTION",
+            s"UCNT_$oper-$rowCount"
+          ) // todo: check it for 32 symbols table name
+          sess.commit()
+          rs.close()
+          rowCount
+        } /*.when(isSessAvail)*/
+          .tapError(er => ZIO.logError(er.getMessage))
+          .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
+    } yield rows
 
   def setTableCopied(table: Table, rowCount: Long): ZIO[Any, SQLException, Unit] =
     for {

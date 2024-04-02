@@ -1,17 +1,17 @@
 package clickhouse
 
-import calc.{CalcParams, ViewQueryMeta}
+import calc.{ CalcParams, ViewQueryMeta }
 import column.OraChColumn
 import com.clickhouse.client.config.ClickHouseClientOption
 import com.clickhouse.client.http.config.HttpConnectionProvider
-import com.clickhouse.jdbc.{ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver}
-import common.{AppendRowsWQuery, LeftJoin, MergeTree, UpdateTableType}
+import com.clickhouse.jdbc.{ ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver }
+import common.{ AppendRowsWQuery, LeftJoin, MergeTree, UpdateTableType }
 import conf.ClickhouseServer
 import table._
-import zio.{ZIO, ZLayer}
+import zio.{ ZIO, ZLayer }
 
-import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Types}
-import java.time.{LocalDateTime, ZoneOffset}
+import java.sql.{ Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Types }
+import java.time.{ LocalDateTime, ZoneOffset }
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 import common.Types._
@@ -21,7 +21,7 @@ case class chSess(sess: Connection, taskId: Int) {
 
   val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
 
-  val chAmdinPass: String  = "admin"
+  val chAmdinPass: String = "admin"
 
   def dateTimeStringToEpoch(s: String): Long =
     LocalDateTime.parse(s, formatter).toEpochSecond(ZoneOffset.UTC)
@@ -80,39 +80,38 @@ case class chSess(sess: Connection, taskId: Int) {
          ).refineToOrDie[SQLException]
   } yield ()
 
-
-       def updateMergeTree(
-                             table: Table,
-                             primaryKeyColumnsCh: List[String]
-                           ): ZIO[Any, SQLException, Unit] = for {
+  def updateMergeTree(
+    table: Table,
+    primaryKeyColumnsCh: List[String]
+  ): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
-      val pkColsStr = primaryKeyColumnsCh.mkString(",")
-      val updateDictName = s"dict_${table.name}"
-      val updateColsSql = table
-        .update_fields
-        .getOrElse("empty_update_fields")
-        .split(",")
-        .map { col =>
-          s"$col = dictGet(${table.schema}.$updateDictName, '$col', ($pkColsStr))"
-        }
-        .mkString(",")
-      val updateQuery =
-        s"""
-           |ALTER TABLE ${table.schema}.${table.name}
-           |UPDATE
-           |       $updateColsSql
-           |where dictHas('${table.schema}.$updateDictName', ($pkColsStr));
-           |""".stripMargin
+           val pkColsStr      = primaryKeyColumnsCh.mkString(",")
+           val updateDictName = s"dict_${table.name}"
+           val updateColsSql  = table
+             .update_fields
+             .getOrElse("empty_update_fields")
+             .split(",")
+             .map { col =>
+               s"$col = dictGet(${table.schema}.$updateDictName, '$col', ($pkColsStr))"
+             }
+             .mkString(",")
+           val updateQuery    =
+             s"""
+                |ALTER TABLE ${table.schema}.${table.name}
+                |UPDATE
+                |       $updateColsSql
+                |where dictHas('${table.schema}.$updateDictName', ($pkColsStr));
+                |""".stripMargin
 
-      println(s"DEBUG updateMergeTree = $updateQuery")
+           println(s"DEBUG updateMergeTree = $updateQuery")
 
-      val rs = sess.createStatement.executeQuery(updateQuery)
-      rs.close()
-      updateQuery
-    }.tapBoth(
-      er => ZIO.logError(er.getMessage),
-      update => ZIO.logDebug(s"updateColumns query = $update")
-    ).refineToOrDie[SQLException]
+           val rs = sess.createStatement.executeQuery(updateQuery)
+           rs.close()
+           updateQuery
+         }.tapBoth(
+           er => ZIO.logError(er.getMessage),
+           update => ZIO.logDebug(s"updateColumns query = $update")
+         ).refineToOrDie[SQLException]
   } yield ()
 
   def getMaxValueByColCh(table: Table): ZIO[Any, SQLException, MaxValAndCnt] = for {
@@ -407,46 +406,46 @@ case class chSess(sess: Connection, taskId: Int) {
     tableType: UpdateTableType
   ): ZIO[Any, SQLException, Long] =
     for {
-      _ <- ZIO.unit
-      updTableName = s"upd_${table.name}"
-      updDictName = s"dict_${table.name}"
-      _           <- ZIO.logInfo(s"temp table for update : $updTableName - $tableType")
-      oraRs       <- rs
-      _           <- debugRsColumns(oraRs)
-      cols         = (1 to oraRs.getMetaData.getColumnCount)
-                       .map(i =>
-                         OraChColumn(
-                           oraRs.getMetaData.getColumnName(i).toLowerCase,
-                           oraRs.getMetaData.getColumnTypeName(i),
-                           oraRs.getMetaData.getColumnClassName(i),
-                           oraRs.getMetaData.getColumnDisplaySize(i),
-                           oraRs.getMetaData.getPrecision(i),
-                           oraRs.getMetaData.getScale(i),
-                           oraRs.getMetaData.isNullable(i),
-                           table.notnull_columns
-                         )
-                       )
-                       .toList
-      nakedCols    = cols.map(chCol => chCol.name).mkString(",\n")
-      colsScript   = cols.map(chCol => chCol.clColumnString).mkString(",\n")
-      pkColumns    = pkColList.mkString(",")
+      _               <- ZIO.unit
+      updTableName     = s"upd_${table.name}"
+      updDictName      = s"dict_${table.name}"
+      _               <- ZIO.logInfo(s"temp table for update : $updTableName - $tableType")
+      oraRs           <- rs
+      _               <- debugRsColumns(oraRs)
+      cols             = (1 to oraRs.getMetaData.getColumnCount)
+                           .map(i =>
+                             OraChColumn(
+                               oraRs.getMetaData.getColumnName(i).toLowerCase,
+                               oraRs.getMetaData.getColumnTypeName(i),
+                               oraRs.getMetaData.getColumnClassName(i),
+                               oraRs.getMetaData.getColumnDisplaySize(i),
+                               oraRs.getMetaData.getPrecision(i),
+                               oraRs.getMetaData.getScale(i),
+                               oraRs.getMetaData.isNullable(i),
+                               table.notnull_columns
+                             )
+                           )
+                           .toList
+      nakedCols        = cols.map(chCol => chCol.name).mkString(",\n")
+      colsScript       = cols.map(chCol => chCol.clColumnString).mkString(",\n")
+      pkColumns        = pkColList.mkString(",")
       updTableFullName = s"${table.schema}.$updTableName"
 
       createScript = tableType match {
-        case LeftJoin =>
-          s"""create table $updTableFullName
-             |(
-             | $colsScript
-             |) ENGINE = Join(ANY, LEFT, $pkColumns) SETTINGS join_use_nulls = 1
-             |""".stripMargin
-        case MergeTree =>
-          s"""create table $updTableFullName
-             |(
-             | $colsScript
-             |) ENGINE = MergeTree PRIMARY KEY ($pkColumns)
-             |""".stripMargin
-      }
-      _          <- ZIO.logDebug(s"update temp table SCRIPT : $createScript")
+                       case LeftJoin  =>
+                         s"""create table $updTableFullName
+                            |(
+                            | $colsScript
+                            |) ENGINE = Join(ANY, LEFT, $pkColumns) SETTINGS join_use_nulls = 1
+                            |""".stripMargin
+                       case MergeTree =>
+                         s"""create table $updTableFullName
+                            |(
+                            | $colsScript
+                            |) ENGINE = MergeTree PRIMARY KEY ($pkColumns)
+                            |""".stripMargin
+                     }
+      _           <- ZIO.logDebug(s"update temp table SCRIPT : $createScript")
 
       insertQuery =
         s"""insert into ${table.schema}.$updTableName
@@ -456,13 +455,13 @@ case class chSess(sess: Connection, taskId: Int) {
            |      ')
            |""".stripMargin
 
-      //If MergeTree then drop dictionary if exists
-      _ <- ZIO.attemptBlockingInterrupt{
-        sess
-          .createStatement
-          .executeQuery(s"drop dictionary if exists ${table.schema}.$updDictName")
-      }.when(tableType == MergeTree)
-        .refineToOrDie[SQLException]
+      // If MergeTree then drop dictionary if exists
+      _          <- ZIO.attemptBlockingInterrupt {
+                      sess
+                        .createStatement
+                        .executeQuery(s"drop dictionary if exists ${table.schema}.$updDictName")
+                    }.when(tableType == MergeTree)
+                      .refineToOrDie[SQLException]
 
       _ <- ZIO.attemptBlockingInterrupt {
              sess
@@ -472,30 +471,32 @@ case class chSess(sess: Connection, taskId: Int) {
              createScript
            }.refineToOrDie[SQLException]
 
-      //If MergeTree then create dictionary
+      // If MergeTree then create dictionary
       _ <- ZIO.attemptBlockingInterrupt {
-          val script =
-            s"""
-               |create dictionary ${table.schema}.$updDictName
-               | (
-               | $colsScript
-               |)
-               |PRIMARY KEY ($pkColumns)
-               |SOURCE(CLICKHOUSE(
-               |					user     '$chAmdinPass'
-               |					password '$chAmdinPass'
-               |					db       '${table.schema}'
-               |					table    '$updTableName'
-               |      ))
-               |LAYOUT(COMPLEX_KEY_DIRECT)
-               |""".stripMargin
-          sess
-            .createStatement
-            .executeQuery(script)
-          script
-        }.when(tableType == MergeTree)
-        .tap(s => ZIO.logInfo(s"create dictionary SCRIPT: ${s.map(_.replace(chAmdinPass,"***"))}"))
-        .refineToOrDie[SQLException]
+             val script =
+               s"""
+                  |create dictionary ${table.schema}.$updDictName
+                  | (
+                  | $colsScript
+                  |)
+                  |PRIMARY KEY ($pkColumns)
+                  |SOURCE(CLICKHOUSE(
+                  |					user     '$chAmdinPass'
+                  |					password '$chAmdinPass'
+                  |					db       '${table.schema}'
+                  |					table    '$updTableName'
+                  |      ))
+                  |LAYOUT(COMPLEX_KEY_DIRECT)
+                  |""".stripMargin
+             sess
+               .createStatement
+               .executeQuery(script)
+             script
+           }.when(tableType == MergeTree)
+             .tap(s =>
+               ZIO.logInfo(s"create dictionary SCRIPT: ${s.map(_.replace(chAmdinPass, "***"))}")
+             )
+             .refineToOrDie[SQLException]
 
       rowsWithQuery <- ZIO.attemptBlockingInterrupt {
                          // ------------------------------------
@@ -504,27 +505,27 @@ case class chSess(sess: Connection, taskId: Int) {
                            case (counter, rs) =>
                              cols.foldLeft(1) { case (i, c) =>
                                (c.typeName, c.scale) match {
-                                 case ("NUMBER", 0) =>
+                                 case ("NUMBER", 0)   =>
                                    val l = rs.getLong(c.name)
                                    if (rs.wasNull())
                                      ps.setNull(i, Types.BIGINT)
                                    else
                                      ps.setLong(i, l)
-                                 case ("NUMBER", _) =>
+                                 case ("NUMBER", _)   =>
                                    val n = rs.getDouble(c.name)
                                    if (rs.wasNull())
                                      ps.setNull(i, Types.DOUBLE)
                                    else
                                      ps.setDouble(i, n)
-                                 case ("CLOB", _) => ps.setString(i, rs.getString(c.name))
+                                 case ("CLOB", _)     => ps.setString(i, rs.getString(c.name))
                                  case ("VARCHAR2", _) =>
                                    val s: String = rs.getString(c.name)
                                    if (rs.wasNull())
                                      ps.setNull(i, Types.VARCHAR)
                                    else
                                      ps.setString(i, s)
-                                 case ("DATE", _) =>
-                                   val tmp = rs.getString(c.name)
+                                 case ("DATE", _)     =>
+                                   val tmp             = rs.getString(c.name)
                                    val isNull: Boolean = rs.wasNull()
                                    if (!isNull) {
                                      val dateAsUnixtimestamp = dateTimeStringToEpoch(tmp)

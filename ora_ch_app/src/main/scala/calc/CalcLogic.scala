@@ -1,8 +1,8 @@
 package calc
 
-import clickhouse.{chSess, jdbcChSession}
-import common.{CalcState, Calculation, Copying, Wait}
-import ora.{jdbcSession, oraSessCalc}
+import clickhouse.{ chSess, jdbcChSession }
+import common.{ CalcState, Calculation, Copying, Wait }
+import ora.{ jdbcSession, oraSessCalc }
 import request.Servers
 import zio.ZIO
 
@@ -16,12 +16,12 @@ object CalcLogic {
     meta <- ora.getQueryMeta(query.query_id)
   } yield meta
 
-/*  private def truncTable(meta: ViewQueryMeta,ch: chSess): ZIO[jdbcChSession, Throwable, Unit] = for {
+  /*  private def truncTable(meta: ViewQueryMeta,ch: chSess): ZIO[jdbcChSession, Throwable, Unit] = for {
     ch <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
     _  <- ch.truncateTable(meta)
   } yield ()*/
 
-/*  private def insertFromQuery(
+  /*  private def insertFromQuery(
                                meta: ViewQueryMeta,
                                query: Query,
                                ch: chSess
@@ -30,7 +30,7 @@ object CalcLogic {
     _  <- ch.insertFromQuery(meta, query.params)
   } yield ()*/
 
-/*  private def truncTable(meta: ViewQueryMeta): ZIO[jdbcChSession, Throwable, Unit] = for {
+  /*  private def truncTable(meta: ViewQueryMeta): ZIO[jdbcChSession, Throwable, Unit] = for {
     ch <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
     _  <- ch.truncateTable(meta)
   } yield ()
@@ -43,7 +43,7 @@ object CalcLogic {
     _  <- ch.insertFromQuery(meta, query.params)
   } yield ()*/
 
-/*  private def calcQuery(
+  /*  private def calcQuery(
     meta: ViewQueryMeta,
     query: Query
   ): ZIO[jdbcChSession, Throwable, Unit] = for {
@@ -63,25 +63,19 @@ object CalcLogic {
     meta: ViewQueryMeta,
     ora: oraSessCalc,
     id_reload_calc: Int
-  ): ZIO[jdbcChSession, Throwable, Int] = for {
+  ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Int] = for {
     _          <- ZIO.logDebug("startCalculation")
+    repo      <- ZIO.service[ImplCalcRepo]
     _          <- ZIO.logInfo(s"ch_table = ${meta.chTable} params_count = ${meta.params.size}")
     queryLogId <- ora.insertViewQueryLog(query, id_reload_calc)
-    /*
-    _ <- truncTable(meta)
-    _ <- insertFromQuery(meta, query)
-    */
-    ch <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
-    calcQuery = ch.truncateTable(meta) *>
-      ch.insertFromQuery(meta, query.params)
-    _ <- calcQuery.tapError(er =>
-      ZIO.logError(s" startCalculation - calcEffect ${er.getMessage}") *>
-        ora.saveCalcError(queryLogId, er.getMessage)
-    )
-/*    _          <- calcQuery(meta, query).tapError(er =>
+    ch         <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
+    calcQuery   = ch.truncateTable(meta) *>
+                    ch.insertFromQuery(meta, query.params)
+    _          <- calcQuery.tapError(er =>
                     ZIO.logError(s" startCalculation - calcEffect ${er.getMessage}") *>
-                      ora.saveCalcError(queryLogId, er.getMessage)
-                  )*/
+                      ora.saveCalcError(queryLogId, er.getMessage) *>
+                      repo.clearCalc
+                  )
     _          <- ora.saveEndCalculation(queryLogId)
   } yield queryLogId
 
@@ -90,15 +84,19 @@ object CalcLogic {
     meta: ViewQueryMeta,
     ora: oraSessCalc,
     queryLogId: Int
-  ): ZIO[jdbcChSession, Throwable, Unit] = for {
+  ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
     _         <- ZIO.logInfo(s"Begin copyDataChOra for query_id = ${query.query_id} ${meta.chTable}")
     ch        <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
+    repo      <- ZIO.service[ImplCalcRepo]
     chTableRs <- ch.getChTableResultSet(meta)
     _         <- ora.saveBeginCopying(queryLogId)
     _         <- ora.truncateTable(meta.oraSchema, meta.oraTable)
     _         <- ora
                    .insertRsDataInTable(chTableRs, meta.oraTable, meta.oraSchema)
-                   .tapError(er => ZIO.logError(s"insertRsDataInTable - ${er.getMessage}"))
+                   .tapError(er => ZIO.logError(s"insertRsDataInTable - ${er.getMessage}") *>
+                     ora.saveCalcError(queryLogId, er.getMessage) *>
+                     repo.clearCalc
+                   )
     _         <- ora.saveEndCopying(queryLogId)
     _         <-
       ZIO.logInfo(
