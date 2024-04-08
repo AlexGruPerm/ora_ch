@@ -12,8 +12,8 @@ import zio.http._
 import zio.json.{ DecoderOps, EncoderOps, JsonDecoder }
 import request.EncDecReqNewTaskImplicits._
 import calc.EncDecReqCalcImplicits._
-import common.{ SessCalc, SessTask, SessTypeEnum, TaskState, Wait, _ }
-import connrepo.OraConnRepoImpl
+import common._
+import connrepo.{ OraConnRepoImpl, OraConnRepoImplUcp }
 import table.Table
 
 import scala.collection.mutable
@@ -90,7 +90,7 @@ object WServer {
   } yield appendKeys
 
   private def copyTableEffect(
-    //sessForUpd: oraSessTask,
+    sessForUpd: oraSessTask,
     taskId: Int,
     sess: oraSessTask,
     sessCh: chSess,
@@ -110,14 +110,12 @@ object WServer {
     maxValAndCnt <- sessCh.getMaxColForSync(table)
     _            <- ZIO.logDebug(s"maxValAndCnt = $maxValAndCnt")
     appendKeys   <- getAppendKeys(sess, sessCh, table)
-    fiberUpdCnt  <-  (ZIO.logInfo("Instead of updatedCopiedRowsCount") *> ZIO.succeed(0L)).fork
-      /*
+    fiberUpdCnt  <- // (ZIO.logInfo("Instead of updatedCopiedRowsCount") *> ZIO.succeed(0L)).fork
       updatedCopiedRowsCount(table, sessForUpd, sessCh, maxValAndCnt)
         .delay(2.second)
         .repeat(Schedule.spaced(5.second))
         .onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted by copyTableEffect"))
         .fork
-    */
     _            <-
       ZIO.logDebug(
         s"syncColMax = ${table.sync_by_column_max} syncUpdateColMax = ${table.sync_update_by_column_max}"
@@ -236,6 +234,7 @@ object WServer {
     repo                    <- ZIO.service[ImplTaskRepo]
     jdbcCh                  <- ZIO.service[jdbcChSession]
     sess                    <- oraSess.sessTask()
+    sessFinish              <- oraSess.sessTask()
     taskId                  <- sess.getTaskIdFromSess
     _                       <- repo.setTaskId(taskId)
     t                       <- sess.getTables(newtask.schemas)
@@ -273,7 +272,7 @@ object WServer {
                                          // Later we can use matching here for adjustment logic.
                                          case Recreate | AppendWhere | AppendByMax | AppendNotIn =>
                                            copyTableEffect(
-                                             //sessForUpd,
+                                             sessForUpd,
                                              task.id,
                                              s,
                                              sessCh,
@@ -284,8 +283,8 @@ object WServer {
                                          case _                                                  => ZIO.succeed(0L)
                                        }
                                      )
-                                       .refineToOrDie[SQLException] *>
-                                       closeSession(s, table)
+                                       .refineToOrDie[SQLException] // *>
+                                     // closeSession(s, table)
                                    }
                                }
 
@@ -309,8 +308,8 @@ object WServer {
                                        case _      => ZIO.succeed(0L)
                                      }
                                    )
-                                     .refineToOrDie[SQLException] *>
-                                     closeSession(s, table)
+                                     .refineToOrDie[SQLException] // *>
+                                   // closeSession(s, table)
                                  }
                                }
 
@@ -337,9 +336,9 @@ object WServer {
         ZIO.logInfo(s"copyEffectsOnlyUpdates IN PARALLEL with parDegree = ${wstask.parDegree}") *>
           ZIO.collectAllPar(operationsUpdates).withParallelism(wstask.parDegree - 1)*/
 
+    _ <- sessFinish.taskFinished
     _ <- repo.setState(TaskState(Wait))
     _ <- repo.clearTask
-    _ <- sess.taskFinished
   } yield ()
 
   private def requestToEntity[A](
@@ -427,12 +426,8 @@ object WServer {
                     for {
                       repo            <- ZIO.service[ImplTaskRepo]
                       _               <- currStatusCheckerTask()
-                      layerOraConnRepo = // plus1 - 1 session for updates.
-                        OraConnRepoImpl.layer(
-                          newTask.servers.oracle,
-                          newTask.parallel.plus1,
-                          "Ucp_task"
-                        )
+                      layerOraConnRepo =
+                        OraConnRepoImpl.layer(newTask.servers.oracle, newTask.parallel.degree)
                       taskEffect       = startTask(newTask)
                                            .provide(
                                              layerOraConnRepo,
@@ -575,7 +570,7 @@ object WServer {
      */
     _    <- executeCalcAndCopy(reqCalc)
               .provide(
-                OraConnRepoImpl.layer(reqCalc.servers.oracle, Parallel(degree = 2), "Ucp_calc"),
+                OraConnRepoImpl.layer(reqCalc.servers.oracle, 2),
                 ZLayer.succeed(repo),
                 ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
                 ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,

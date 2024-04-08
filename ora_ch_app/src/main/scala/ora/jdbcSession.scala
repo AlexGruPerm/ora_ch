@@ -2,7 +2,7 @@ package ora
 
 import calc.{ Query, VQParams, ViewQueryMeta }
 import column.OraChColumn
-import zio.{ Task, ZIO, _ }
+import zio._
 import conf.OraServer
 import oracle.jdbc.OracleDriver
 import request.{ AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable }
@@ -21,7 +21,7 @@ import java.util.Properties
 import common.Types._
 import OraChColumn._
 import common.{ ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum }
-import connrepo.OraConnRepoImpl
+import connrepo.{ OraConnRepoImpl, OraConnRepoImplUcp }
 
 import java.util.concurrent.TimeUnit
 

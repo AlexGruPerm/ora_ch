@@ -3,7 +3,7 @@ package calc
 import calc.types.CalcId
 import zio.{ Ref, Task, UIO, ZIO, ZLayer }
 import common._
-import connrepo.OraConnRepoImpl
+import connrepo.OraConnRepoImplUcp
 
 object types {
   type CalcId = Int

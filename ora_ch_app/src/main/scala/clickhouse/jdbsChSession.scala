@@ -351,11 +351,6 @@ case class chSess(sess: Connection, taskId: Int) {
                           Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) { case (counter, rs) =>
                             cols.foldLeft(1) { case (i, c) =>
                               (c.typeName, c.scale) match {
-                                case ("NUMBER", 0)   => ps.setLong(i, rs.getLong(c.name))
-                                case ("NUMBER", _)   => ps.setDouble(i, rs.getDouble(c.name))
-                                case ("CLOB", _)     => ps.setString(i, rs.getString(c.name))
-                                case ("VARCHAR2", _) => ps.setString(i, rs.getString(c.name))
-                                /*
                                 // -------------------------------------
                                 case ("NUMBER", 0)   =>
                                   val l = rs.getLong(c.name)
@@ -376,7 +371,7 @@ case class chSess(sess: Connection, taskId: Int) {
                                     ps.setNull(i, Types.VARCHAR)
                                   else {
                                     ps.setString(i, s)
-                       */
+                                  }
                                 // ----------------------------------------------------------------
                                 case ("DATE", _)     =>
                                   val tmp             = rs.getString(c.name)
