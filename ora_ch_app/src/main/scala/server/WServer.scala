@@ -90,7 +90,7 @@ object WServer {
   } yield appendKeys
 
   private def copyTableEffect(
-    sessForUpd: oraSessTask,
+    //sessForUpd: oraSessTask,
     taskId: Int,
     sess: oraSessTask,
     sessCh: chSess,
@@ -110,12 +110,14 @@ object WServer {
     maxValAndCnt <- sessCh.getMaxColForSync(table)
     _            <- ZIO.logDebug(s"maxValAndCnt = $maxValAndCnt")
     appendKeys   <- getAppendKeys(sess, sessCh, table)
-    fiberUpdCnt  <-
+    fiberUpdCnt  <-  (ZIO.logInfo("Instead of updatedCopiedRowsCount") *> ZIO.succeed(0L)).fork
+      /*
       updatedCopiedRowsCount(table, sessForUpd, sessCh, maxValAndCnt)
-        .onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted by copyTableEffect"))
         .delay(2.second)
         .repeat(Schedule.spaced(5.second))
+        .onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted by copyTableEffect"))
         .fork
+    */
     _            <-
       ZIO.logDebug(
         s"syncColMax = ${table.sync_by_column_max} syncUpdateColMax = ${table.sync_update_by_column_max}"
@@ -128,10 +130,8 @@ object WServer {
                           saveError(sess, er.getMessage, Some(fiberUpdCnt), table)
                       )
                       .refineToOrDie[SQLException]
-    // _            <- ZIO.logInfo(".........before interruption")
     _            <-
-      fiberUpdCnt.interrupt // todo: can't check message of interruption - "updatedCopiedRowsCount interrupted by copyTableEffect"
-    // _            <- ZIO.logInfo(".........after interruption")
+      fiberUpdCnt.interrupt
     _            <- sess.setTableCopied(table, rowCount)
     _            <-
       ZIO.logInfo(
@@ -204,6 +204,7 @@ object WServer {
       updatedCopiedRowsCountFUpd(table, table.copy(name = updateMergeTreeTable), sessForUpd, sessCh)
         .delay(2.second)
         .repeat(Schedule.spaced(5.second))
+        .onInterrupt(ZIO.logInfo("updateWithTableDict interrupted by copyTableEffect"))
         .fork
     rowCount            <- sessCh.recreateTmpTableForUpdate(
                              table,
@@ -272,7 +273,7 @@ object WServer {
                                          // Later we can use matching here for adjustment logic.
                                          case Recreate | AppendWhere | AppendByMax | AppendNotIn =>
                                            copyTableEffect(
-                                             sessForUpd,
+                                             //sessForUpd,
                                              task.id,
                                              s,
                                              sessCh,
@@ -496,6 +497,17 @@ object WServer {
     } else
       acc
 
+  private def getCalcAndCopyEffect(
+    oraSess: jdbcSession,
+    q: Query,
+    idReloadCalcId: Int
+  ): ZIO[ImplCalcRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
+    s          <- oraSess.sessCalc(debugMsg = "calc - copyDataChOra")
+    meta       <- CalcLogic.getCalcMeta(q, s)
+    queryLogId <- CalcLogic.startCalculation(q, meta, s, idReloadCalcId)
+    eff        <- CalcLogic.copyDataChOra(q, meta, s, queryLogId)
+  } yield eff
+
   private def executeCalcAndCopy(
     reqCalc: ReqCalcSrc
   ): ZIO[ImplCalcRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
@@ -517,6 +529,12 @@ object WServer {
 
     calcsEffects =
       listOfListsQuery(mapOfQueues(queries)).map(query =>
+        query.map(q => (q.query_id, getCalcAndCopyEffect(oraSess, q, reqCalc.id_reload_calc)))
+      )
+
+    /*    // old code
+    calcsEffects =
+      listOfListsQuery(mapOfQueues(queries)).map(query =>
         query.map(q =>
           (
             q.query_id,
@@ -530,12 +548,14 @@ object WServer {
             }
           )
         )
-      )
+      )*/
 
     _ <- ZIO.foreachDiscard(calcsEffects) { lst =>
            ZIO.logInfo(s"parallel execution of ${lst.map(_._1).toList} ---------------") *>
-             ZIO.collectAllPar(lst.map(_._2)).withParallelism(2)
-           // ZIO.collectAll(lst.map(_._2))
+             ZIO
+               .collectAllPar(lst.map(_._2))
+               .withParallelism(2 /*SEQ-PAR*/ )
+               .tapError(_ => repo.clearCalc)
          }
 
     _ <- repo.clearCalc

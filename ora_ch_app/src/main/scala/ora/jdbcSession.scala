@@ -23,6 +23,8 @@ import OraChColumn._
 import common.{ ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum }
 import connrepo.OraConnRepoImpl
 
+import java.util.concurrent.TimeUnit
+
 sealed trait oraSess {
   def sess: Connection
   def getPid: Int = {
@@ -353,11 +355,11 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
     maxColCh: Option[MaxValAndCnt],
     appendKeys: Option[List[Any]] = Option.empty[List[Any]]
   ): ZIO[Any, SQLException, ResultSet] = for {
-    sid <- ZIO.attemptBlockingInterrupt {
-             getPid
-           }.tapError(er => ZIO.logError(er.getMessage))
-             .refineToOrDie[SQLException]
-    _   <-
+    sid            <- ZIO.attemptBlockingInterrupt {
+                        getPid
+                      }.tapError(er => ZIO.logError(er.getMessage))
+                        .refineToOrDie[SQLException]
+    _              <-
       ZIO.attemptBlockingInterrupt {
         val query: String =
           s""" update ora_to_ch_tasks_tables t
@@ -373,57 +375,63 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         rs.close()
       }.tapError(er => ZIO.logError(er.getMessage))
         .refineToOrDie[SQLException]
-    _   <-
-      ZIO.logInfo(s"getDataResultSet maxColCh.CntRows = ${maxColCh.map(_.CntRows).getOrElse(0L)}")
-
-    rsWithQuery <- ZIO.attemptBlockingInterrupt {
-                     val whereByFields: String = getAppendByFieldsPart(table, appendKeys)
-                     val dataQuery             =
-                       s""" select /*+ ALL_ROWS */ ${table.only_columns.getOrElse("*")} from ${table
-                           .fullTableName()} ${table.operation match {
-                           case Recreate    =>
-                             s"${table.where_filter.map(where_filter => s" where $where_filter").getOrElse(" ")}"
-                           case AppendWhere =>
-                             table.where_filter match {
-                               case Some(wf) => s" where $wf"
-                               case None     => " "
-                             }
-                           case AppendByMax =>
-                             (table.where_filter, maxColCh.map(_.MaxValue)) match {
-                               case (Some(wf), Some(maxId)) =>
-                                 s" where $wf and ${table.sync_by_column_max.getOrElse("X")} > $maxId "
-                               case (Some(wf), None)        => s" where $wf "
-                               case (None, Some(maxId))     =>
-                                 s" where ${table.sync_by_column_max.getOrElse("X")} > $maxId "
-                               case (None, None)            => " "
-                             }
-                           // in this case we don't add where_filter, you can use AppendWhere.
-                           case AppendNotIn => s" where $whereByFields "
-                           case _           => " "
-                         }}
+    _              <-
+      ZIO.logInfo(
+        s"getDataResultSet maxColCh.CntRows = ${maxColCh.map(_.CntRows).getOrElse(0L)} fetch_size = $fetch_size"
+      )
+    dtBeforeOpenRs <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    rsWithQuery    <- ZIO.attemptBlockingInterrupt {
+                        val whereByFields: String = getAppendByFieldsPart(table, appendKeys)
+                        /// *+ ALL_ROWS */
+                        val dataQuery             =
+                          s""" select  ${table.only_columns.getOrElse("*")} from ${table
+                              .fullTableName()} ${table.operation match {
+                              case Recreate    =>
+                                s"${table.where_filter.map(where_filter => s" where $where_filter").getOrElse(" ")}"
+                              case AppendWhere =>
+                                table.where_filter match {
+                                  case Some(wf) => s" where $wf"
+                                  case None     => " "
+                                }
+                              case AppendByMax =>
+                                (table.where_filter, maxColCh.map(_.MaxValue)) match {
+                                  case (Some(wf), Some(maxId)) =>
+                                    s" where $wf and ${table.sync_by_column_max.getOrElse("X")} > $maxId "
+                                  case (Some(wf), None)        => s" where $wf "
+                                  case (None, Some(maxId))     =>
+                                    s" where ${table.sync_by_column_max.getOrElse("X")} > $maxId "
+                                  case (None, None)            => " "
+                                }
+                              // in this case we don't add where_filter, you can use AppendWhere.
+                              case AppendNotIn => s" where $whereByFields "
+                              case _           => " "
+                            }}
           ${table.ins_select_order_by.map(order => s" order by $order ").getOrElse(" ")}
         """.stripMargin
 
-                     println(s"DEBUG_QUERY = $dataQuery")
+                        println(s"DEBUG_QUERY = $dataQuery")
 
-                     setContext(table)
-                     val dataRs = sess
-                       .createStatement(
-                         java.sql.ResultSet.TYPE_FORWARD_ONLY,
-                         ResultSet.CONCUR_READ_ONLY
-                       )
-                       .executeQuery(dataQuery)
-                     dataRs.setFetchSize(fetch_size)
-                     ResultSetWithQuery(dataRs, dataQuery)
-                   }.tapBoth(
-                     er =>
-                       ZIO.logError(
-                         s"Exception: ${er.getMessage} curr_date_context=${table.curr_date_context}"
-                       ),
-                     rsq =>
-                       ZIO.logDebug(s" >>>>>>>>>>>>>   getDataResultSet select = ${rsq.query} ")
-                   ).refineToOrDie[SQLException]
-    _           <- ZIO.logInfo(s"ORACLE getDataResultSet, QUERY = ${rsWithQuery.query}")
+                        setContext(table)
+                        val dataRs = sess
+                          .createStatement(
+                            java.sql.ResultSet.TYPE_FORWARD_ONLY,
+                            ResultSet.CONCUR_READ_ONLY
+                          )
+                          .executeQuery(dataQuery)
+                        dataRs.setFetchSize(fetch_size)
+                        ResultSetWithQuery(dataRs, dataQuery)
+                      }.tapBoth(
+                        er =>
+                          ZIO.logError(
+                            s"Exception: ${er.getMessage} curr_date_context=${table.curr_date_context}"
+                          ),
+                        rsq =>
+                          ZIO.logDebug(s" >>>>>>>>>>>>>   getDataResultSet select = ${rsq.query} ")
+                      ).refineToOrDie[SQLException]
+    dtAfterOpenRs  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _              <-
+      ZIO.logInfo(s"ORACLE.RS Execute select query timing : ${dtAfterOpenRs - dtBeforeOpenRs} ms.")
+    _              <- ZIO.logInfo(s"ORACLE getDataResultSet, QUERY = ${rsWithQuery.query}")
   } yield rsWithQuery.rs
 
   /**
@@ -440,8 +448,9 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
     _            <- ZIO.unit
     selectColumns = s"${primaryKeyColumnsCh.mkString(",")},${table.updateColumns()} "
     rs           <- ZIO.attemptBlockingInterrupt {
+                      /// *+ ALL_ROWS */
                       val dataQuery                =
-                        s"select /*+ ALL_ROWS */ $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
+                        s"select  $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
                       println(s"getDataResultSetForUpdate dataQuery = $dataQuery")
                       setContext(table)
                       val dateQueryWithOrd: String = s"$dataQuery ${table.orderBy()}"

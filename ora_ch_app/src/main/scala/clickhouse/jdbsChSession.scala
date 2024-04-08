@@ -8,14 +8,16 @@ import com.clickhouse.jdbc.{ ClickHouseConnection, ClickHouseDataSource, ClickHo
 import common.{ AppendRowsWQuery, LeftJoin, MergeTree, UpdateTableType }
 import conf.ClickhouseServer
 import table._
-import zio.{ ZIO, ZLayer }
+import zio.{ Clock, ZIO, ZLayer }
 
 import java.sql.{ Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Types }
 import java.time.{ LocalDateTime, ZoneOffset }
 import java.time.format.DateTimeFormatter
-import java.util.Properties
+import java.util.{ Calendar, Properties }
 import common.Types._
 import request.AppendWhere
+
+import java.util.concurrent.TimeUnit
 
 case class chSess(sess: Connection, taskId: Int) {
 
@@ -231,6 +233,8 @@ case class chSess(sess: Connection, taskId: Int) {
     rows <- ZIO.attemptBlockingInterrupt {
               val rsRowCount = sess
                 .createStatement
+                // todo: for performance reason take this info from system.tables
+                // instead of from direct table.
                 .executeQuery(s"select count() as cnt from ${table.schema}.${table.name}")
               rsRowCount.next()
               val rowCount   = rsRowCount.getLong(1)
@@ -286,7 +290,9 @@ case class chSess(sess: Connection, taskId: Int) {
     maxValCnt: Option[MaxValAndCnt]
   ): ZIO[Any, SQLException, Long] =
     for {
-      _         <- ZIO.logInfo(s"recreateTableCopyData table : ${table.fullTableName()}")
+      _         <- ZIO.logInfo(
+                     s"recreateTableCopyData table : ${table.fullTableName()} batch_size = $batch_size"
+                   )
       oraRs     <- rs
       _         <- debugRsColumns(oraRs)
       cols       = (1 to oraRs.getMetaData.getColumnCount)
@@ -328,74 +334,102 @@ case class chSess(sess: Connection, taskId: Int) {
            |""".stripMargin
       _           <- ZIO.logDebug(s"insQuer = $insQuer")
 
-      _ <- ZIO.attemptBlockingInterrupt {
-             sess
-               .createStatement
-               .executeQuery(s"drop table if exists ${table.schema}.${table.name}")
-             sess.createStatement.executeQuery(createScript)
-           }.tapError(er => ZIO.logError(er.getMessage))
-             .refineToOrDie[SQLException]
-             .when(table.recreate == 1)
-
-      rows <- ZIO.attemptBlockingInterrupt {
-                val ps: PreparedStatement = sess.prepareStatement(insQuer)
-                Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) { case (counter, rs) =>
-                  cols.foldLeft(1) { case (i, c) =>
-                    (c.typeName, c.scale) match {
-                      case ("NUMBER", 0)   =>
-                        val l = rs.getLong(c.name)
-                        if (rs.wasNull())
-                          ps.setNull(i, Types.BIGINT)
-                        else
-                          ps.setLong(i, l)
-                      case ("NUMBER", _)   =>
-                        val n = rs.getDouble(c.name)
-                        if (rs.wasNull())
-                          ps.setNull(i, Types.DOUBLE)
-                        else
-                          ps.setDouble(i, n)
-                      case ("CLOB", _)     => ps.setString(i, rs.getString(c.name))
-                      case ("VARCHAR2", _) =>
-                        val s: String = rs.getString(c.name)
-                        if (rs.wasNull())
-                          ps.setNull(i, Types.VARCHAR)
-                        else
-                          ps.setString(i, s)
-                      case ("DATE", _)     =>
-                        val tmp             = rs.getString(c.name)
-                        val isNull: Boolean = rs.wasNull()
-                        if (!isNull) {
-                          val dateAsUnixtimestamp = dateTimeStringToEpoch(tmp)
-                          if (dateAsUnixtimestamp <= 0L)
-                            ps.setObject(i, "1971-01-01 00:00:00")
-                          else {
-                            if (dateAsUnixtimestamp >= 4296677295L)
-                              ps.setObject(i, "2106-01-01 00:00:00")
-                            else
-                              ps.setObject(i, tmp)
+      _              <- ZIO.attemptBlockingInterrupt {
+                          sess
+                            .createStatement
+                            .executeQuery(s"drop table if exists ${table.schema}.${table.name}")
+                          sess.createStatement.executeQuery(createScript)
+                        }.tapError(er => ZIO.logError(er.getMessage))
+                          .refineToOrDie[SQLException]
+                          .when(table.recreate == 1)
+      dtBeforeCoping <- Clock.currentTime(TimeUnit.MILLISECONDS)
+      rows           <- ZIO.attemptBlockingInterrupt {
+                          val ps: PreparedStatement = sess.prepareStatement(insQuer)
+                          var beforeBuildBatch      = System.currentTimeMillis()
+                          var sumBuildBatch         = 0L
+                          var sumExecBatch          = 0L
+                          Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) { case (counter, rs) =>
+                            cols.foldLeft(1) { case (i, c) =>
+                              (c.typeName, c.scale) match {
+                                case ("NUMBER", 0)   => ps.setLong(i, rs.getLong(c.name))
+                                case ("NUMBER", _)   => ps.setDouble(i, rs.getDouble(c.name))
+                                case ("CLOB", _)     => ps.setString(i, rs.getString(c.name))
+                                case ("VARCHAR2", _) => ps.setString(i, rs.getString(c.name))
+                                /*
+                                // -------------------------------------
+                                case ("NUMBER", 0)   =>
+                                  val l = rs.getLong(c.name)
+                                  if (rs.wasNull())
+                                    ps.setNull(i, Types.BIGINT)
+                                  else
+                                    ps.setLong(i, l)
+                                case ("NUMBER", _)   =>
+                                  val n = rs.getDouble(c.name)
+                                  if (rs.wasNull())
+                                    ps.setNull(i, Types.DOUBLE)
+                                  else
+                                    ps.setDouble(i, n)
+                                case ("CLOB", _)     => ps.setString(i, rs.getString(c.name))
+                                case ("VARCHAR2", _) =>
+                                  val s: String = rs.getString(c.name)
+                                  if (rs.wasNull())
+                                    ps.setNull(i, Types.VARCHAR)
+                                  else {
+                                    ps.setString(i, s)
+                       */
+                                // ----------------------------------------------------------------
+                                case ("DATE", _)     =>
+                                  val tmp             = rs.getString(c.name)
+                                  val isNull: Boolean = rs.wasNull()
+                                  if (!isNull) {
+                                    val dateAsUnixtimestamp = dateTimeStringToEpoch(tmp)
+                                    if (dateAsUnixtimestamp <= 0L)
+                                      ps.setObject(i, "1971-01-01 00:00:00")
+                                    else {
+                                      if (dateAsUnixtimestamp >= 4296677295L)
+                                        ps.setObject(i, "2106-01-01 00:00:00")
+                                      else
+                                        ps.setObject(i, tmp)
+                                    }
+                                  } else
+                                    ps.setNull(i, Types.DATE)
+                              }
+                              i + 1
+                            }
+                            ps.addBatch()
+                            if (counter == batch_size) {
+                              println(
+                                s"buildBatch = ${System.currentTimeMillis() - beforeBuildBatch} ms."
+                              )
+                              sumBuildBatch = sumBuildBatch + System.currentTimeMillis() - beforeBuildBatch
+                              beforeBuildBatch = System.currentTimeMillis()
+                              val beforeExecBatch = System.currentTimeMillis()
+                              ps.executeBatch()
+                              println(
+                                s"executeBatch = ${System.currentTimeMillis() - beforeExecBatch} ms.  counter = $counter"
+                              )
+                              sumExecBatch = sumExecBatch + System.currentTimeMillis() - beforeExecBatch
+                              0
+                            } else
+                              counter + 1
                           }
-                        } else
-                          ps.setNull(i, Types.DATE)
-                    }
-                    i + 1
-                  }
-                  ps.addBatch()
-                  if (counter == batch_size) {
-                    ps.executeBatch()
-                    0
-                  } else
-                    counter + 1
-                }
-                ps.executeBatch()
-                val rsRowCount            = sess
-                  .createStatement
-                  .executeQuery(s"select sum(1) as cnt from ${table.schema}.${table.name}")
-                rsRowCount.next()
-                val rowCount              = rsRowCount.getLong(1)
-                rsRowCount.close()
-                rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
-              }.refineToOrDie[SQLException]
-      _    <- ZIO.logInfo(s"Copied $rows rows to ${table.schema}.${table.name}")
+                          ps.executeBatch()
+                          val rsRowCount            = sess
+                            .createStatement
+                            .executeQuery(s"select sum(1) as cnt from ${table.schema}.${table.name}")
+                          rsRowCount.next()
+                          val rowCount              = rsRowCount.getLong(1)
+                          rsRowCount.close()
+
+                          println(s"sumBuildBatch = $sumBuildBatch ms.")
+                          println(s"sumExecBatch = $sumExecBatch ms.")
+                          rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
+                        }.refineToOrDie[SQLException]
+      dtAfterCoping  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+      _              <-
+        ZIO.logInfo(
+          s"Copied $rows rows to ${table.schema}.${table.name} with ${dtAfterCoping - dtBeforeCoping} ms."
+        )
     } yield rows
 
   def recreateTmpTableForUpdate(
@@ -654,6 +688,8 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
     _    <- ZIO.unit
     sess <- ZIO.attemptBlockingInterrupt {
               props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
+              props.setProperty("socket_timeout", "120000")      // property in ms. 120 seconds.
+              props.setProperty("dataTransferTimeout", "240000") // property in ms. 120 seconds.
               val dataSource                 = new ClickHouseDataSource(ch.getUrl, props)
               val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
               chSess(conn, taskId)
