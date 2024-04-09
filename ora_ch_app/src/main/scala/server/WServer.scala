@@ -13,7 +13,7 @@ import zio.json.{ DecoderOps, EncoderOps, JsonDecoder }
 import request.EncDecReqNewTaskImplicits._
 import calc.EncDecReqCalcImplicits._
 import common._
-import connrepo.{ OraConnRepoImpl, OraConnRepoImplUcp }
+import connrepo.OraConnRepoImpl
 import table.Table
 
 import scala.collection.mutable
@@ -128,8 +128,8 @@ object WServer {
                           saveError(sess, er.getMessage, Some(fiberUpdCnt), table)
                       )
                       .refineToOrDie[SQLException]
-    _            <-
-      fiberUpdCnt.interrupt
+    // _            <-
+    // fiberUpdCnt.interrupt
     _            <- sess.setTableCopied(table, rowCount)
     _            <-
       ZIO.logInfo(
@@ -234,9 +234,12 @@ object WServer {
     repo                    <- ZIO.service[ImplTaskRepo]
     jdbcCh                  <- ZIO.service[jdbcChSession]
     sess                    <- oraSess.sessTask()
-    sessFinish              <- oraSess.sessTask()
     taskId                  <- sess.getTaskIdFromSess
     _                       <- repo.setTaskId(taskId)
+    // _ <- ZIO.logInfo(s" >>>>>>>>> DEBUG LINE 1 SLEEP ........ taskId = $taskId") *> ZIO.sleep(20.seconds)
+    // todo: !!! sessFinish              <- oraSess.sessTask(Some(taskId))
+    // todo: !!! taskId2                 <- sess.getTaskIdFromSess
+    // _  <- ZIO.logInfo(s" >>>>>>>>> DEBUG LINE 2 SLEEP ........ taskId2 = $taskId2") *> ZIO.sleep(20.seconds)
     t                       <- sess.getTables(newtask.schemas)
     wstask                   = WsTask(
                                  id = taskId,
@@ -336,7 +339,7 @@ object WServer {
         ZIO.logInfo(s"copyEffectsOnlyUpdates IN PARALLEL with parDegree = ${wstask.parDegree}") *>
           ZIO.collectAllPar(operationsUpdates).withParallelism(wstask.parDegree - 1)*/
 
-    _ <- sessFinish.taskFinished
+    _ <- sessForUpd.taskFinished // todo: !!! sessFinish.taskFinished
     _ <- repo.setState(TaskState(Wait))
     _ <- repo.clearTask
   } yield ()
@@ -428,6 +431,7 @@ object WServer {
                       _               <- currStatusCheckerTask()
                       layerOraConnRepo =
                         OraConnRepoImpl.layer(newTask.servers.oracle, newTask.parallel.degree)
+                      // There is no connection created.
                       taskEffect       = startTask(newTask)
                                            .provide(
                                              layerOraConnRepo,

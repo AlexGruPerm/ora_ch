@@ -345,9 +345,9 @@ case class chSess(sess: Connection, taskId: Int) {
       dtBeforeCoping <- Clock.currentTime(TimeUnit.MILLISECONDS)
       rows           <- ZIO.attemptBlockingInterrupt {
                           val ps: PreparedStatement = sess.prepareStatement(insQuer)
-                          var beforeBuildBatch      = System.currentTimeMillis()
-                          var sumBuildBatch         = 0L
-                          var sumExecBatch          = 0L
+                          //var beforeBuildBatch      = System.currentTimeMillis()
+                          //var sumBuildBatch         = 0L
+                          //var sumExecBatch          = 0L
                           Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) { case (counter, rs) =>
                             cols.foldLeft(1) { case (i, c) =>
                               (c.typeName, c.scale) match {
@@ -393,17 +393,17 @@ case class chSess(sess: Connection, taskId: Int) {
                             }
                             ps.addBatch()
                             if (counter == batch_size) {
-                              println(
+/*                              println(
                                 s"buildBatch = ${System.currentTimeMillis() - beforeBuildBatch} ms."
                               )
                               sumBuildBatch = sumBuildBatch + System.currentTimeMillis() - beforeBuildBatch
                               beforeBuildBatch = System.currentTimeMillis()
-                              val beforeExecBatch = System.currentTimeMillis()
+                              val beforeExecBatch = System.currentTimeMillis()*/
                               ps.executeBatch()
-                              println(
+/*                              println(
                                 s"executeBatch = ${System.currentTimeMillis() - beforeExecBatch} ms.  counter = $counter"
                               )
-                              sumExecBatch = sumExecBatch + System.currentTimeMillis() - beforeExecBatch
+                              sumExecBatch = sumExecBatch + System.currentTimeMillis() - beforeExecBatch*/
                               0
                             } else
                               counter + 1
@@ -415,9 +415,8 @@ case class chSess(sess: Connection, taskId: Int) {
                           rsRowCount.next()
                           val rowCount              = rsRowCount.getLong(1)
                           rsRowCount.close()
-
-                          println(s"sumBuildBatch = $sumBuildBatch ms.")
-                          println(s"sumExecBatch = $sumExecBatch ms.")
+                          //println(s"sumBuildBatch = $sumBuildBatch ms.")
+                          //println(s"sumExecBatch = $sumExecBatch ms.")
                           rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
                         }.refineToOrDie[SQLException]
       dtAfterCoping  <- Clock.currentTime(TimeUnit.MILLISECONDS)

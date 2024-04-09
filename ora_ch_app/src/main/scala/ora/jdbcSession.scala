@@ -21,7 +21,7 @@ import java.util.Properties
 import common.Types._
 import OraChColumn._
 import common.{ ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum }
-import connrepo.{ OraConnRepoImpl, OraConnRepoImplUcp }
+import connrepo.OraConnRepoImpl
 
 import java.util.concurrent.TimeUnit
 
@@ -664,6 +664,7 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
     _       <- ZIO.logInfo(
                  s"[sessTask] jdbcSessionImpl.sess [${taskIdOpt.getOrElse(0)}] call oraConnectionTask"
                )
+    _       <- ZIO.logInfo(s"sessTask taskIdOpt = $taskIdOpt")
     session <- if (taskIdOpt.getOrElse(0) == 0)
                  oraConnectionTask()
                else

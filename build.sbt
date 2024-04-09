@@ -15,7 +15,7 @@ ThisBuild / scalaVersion := "2.13.10"
     val zio_config         = "4.0.0-RC16"
     val zio_http           = "3.0.0-RC4"
     val zio_json           = "0.6.2"
-    //val apacheDbcp2        = "2.11.0"
+    val apacheDbcp2        = "2.12.0"
   }
 
   // PROJECTS
@@ -56,10 +56,10 @@ ThisBuild / scalaVersion := "2.13.10"
       val zio_json          = "dev.zio" %% "zio-json" % Versions.zio_json
 
       val orai18n           = "com.oracle.database.nls" % "orai18n" % "23.3.0.23.09"
-      //val dbcp2             = "org.apache.commons" % "commons-dbcp2" % Versions.apacheDbcp2
+      val dbcp2             = "org.apache.commons" % "commons-dbcp2" % Versions.apacheDbcp2
 
       val zioDep = List(zio, zio_conf, zio_conf_typesafe, zio_conf_magnolia, zio_http, zio_json)
-      val chDep = List(chHttpClient,apacheHttpClient, ch, slf4j, log4j, lz4, orai18n/*, dbcp2*/)
+      val chDep = List(chHttpClient,apacheHttpClient, ch, slf4j, log4j, lz4, orai18n, dbcp2)
     }
 
   val commonDependencies = {
