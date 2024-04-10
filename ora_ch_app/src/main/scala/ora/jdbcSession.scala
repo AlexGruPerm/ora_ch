@@ -581,6 +581,17 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
           .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
     } yield rows
 
+  def clearOraTable(clearTable: String): ZIO[Any, SQLException, Unit] =
+    for {
+      _ <-
+        ZIO.attemptBlockingInterrupt {
+          val query: String = s" delete from $clearTable "
+          val rs: ResultSet = sess.createStatement.executeQuery(query)
+          sess.commit()
+          rs.close()
+        }.refineToOrDie[SQLException]
+    } yield ()
+
   def setTableCopied(table: Table, rowCount: Long): ZIO[Any, SQLException, Unit] =
     for {
       taskId <- getTaskIdFromSess
@@ -639,7 +650,8 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
               t.sync_by_column_max,
               t.update_fields,
               t.sync_by_columns,
-              t.sync_update_by_column_max
+              t.sync_update_by_column_max,
+              t.clr_ora_table_aft_upd
             )
           )
         }

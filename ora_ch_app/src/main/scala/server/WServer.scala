@@ -110,11 +110,11 @@ object WServer {
     maxValAndCnt <- sessCh.getMaxColForSync(table)
     _            <- ZIO.logDebug(s"maxValAndCnt = $maxValAndCnt")
     appendKeys   <- getAppendKeys(sess, sessCh, table)
-    fiberUpdCnt  <- // (ZIO.logInfo("Instead of updatedCopiedRowsCount") *> ZIO.succeed(0L)).fork
+    fiberUpdCnt  <-
       updatedCopiedRowsCount(table, sessForUpd, sessCh, maxValAndCnt)
         .delay(2.second)
         .repeat(Schedule.spaced(5.second))
-        .onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted by copyTableEffect"))
+        // .onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted by copyTableEffect"))
         .fork
     _            <-
       ZIO.logDebug(
@@ -202,7 +202,7 @@ object WServer {
       updatedCopiedRowsCountFUpd(table, table.copy(name = updateMergeTreeTable), sessForUpd, sessCh)
         .delay(2.second)
         .repeat(Schedule.spaced(5.second))
-        .onInterrupt(ZIO.logInfo("updateWithTableDict interrupted by copyTableEffect"))
+        // .onInterrupt(ZIO.logInfo("updateWithTableDict interrupted by copyTableEffect"))
         .fork
     rowCount            <- sessCh.recreateTmpTableForUpdate(
                              table,
@@ -214,6 +214,8 @@ object WServer {
     _                   <- ZIO.logInfo(s"updateWithTableDict rowCount = $rowCount")
     _                   <- sess.setTableCopied(table, rowCount)
     _                   <- sessCh.updateMergeTree(table, primaryKeyColumnsCh)
+    _                   <- sess.clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
+      .when(table.clr_ora_table_aft_upd.nonEmpty)
   } yield rowCount
 
   private def closeSession(s: oraSessTask, table: Table): ZIO[Any, SQLException, Unit] = for {
@@ -236,10 +238,6 @@ object WServer {
     sess                    <- oraSess.sessTask()
     taskId                  <- sess.getTaskIdFromSess
     _                       <- repo.setTaskId(taskId)
-    // _ <- ZIO.logInfo(s" >>>>>>>>> DEBUG LINE 1 SLEEP ........ taskId = $taskId") *> ZIO.sleep(20.seconds)
-    // todo: !!! sessFinish              <- oraSess.sessTask(Some(taskId))
-    // todo: !!! taskId2                 <- sess.getTaskIdFromSess
-    // _  <- ZIO.logInfo(s" >>>>>>>>> DEBUG LINE 2 SLEEP ........ taskId2 = $taskId2") *> ZIO.sleep(20.seconds)
     t                       <- sess.getTables(newtask.schemas)
     wstask                   = WsTask(
                                  id = taskId,
@@ -286,8 +284,8 @@ object WServer {
                                          case _                                                  => ZIO.succeed(0L)
                                        }
                                      )
-                                       .refineToOrDie[SQLException] // *>
-                                     // closeSession(s, table)
+                                       .refineToOrDie[SQLException] *>
+                                       closeSession(s, table)
                                    }
                                }
 
@@ -311,8 +309,8 @@ object WServer {
                                        case _      => ZIO.succeed(0L)
                                      }
                                    )
-                                     .refineToOrDie[SQLException] // *>
-                                   // closeSession(s, table)
+                                     .refineToOrDie[SQLException] *>
+                                     closeSession(s, table)
                                  }
                                }
 
@@ -330,16 +328,13 @@ object WServer {
            ) *>
              ZIO.collectAllPar(operationsExcludeUpdates).withParallelism(wstask.parDegree - 1) *>
              ZIO.collectAllPar(operationsUpdates).withParallelism(wstask.parDegree - 1)
-
-    /*    _ <-
-      if (wstask.parDegree <= 2)
-        ZIO.logInfo(s"copyEffectsOnlyUpdates SEQUENTIALLY with parDegree = ${wstask.parDegree}") *>
-          ZIO.collectAll(operationsUpdates)
-      else
-        ZIO.logInfo(s"copyEffectsOnlyUpdates IN PARALLEL with parDegree = ${wstask.parDegree}") *>
-          ZIO.collectAllPar(operationsUpdates).withParallelism(wstask.parDegree - 1)*/
-
-    _ <- sessForUpd.taskFinished // todo: !!! sessFinish.taskFinished
+    _ <- sessForUpd.taskFinished
+    _ <- ZIO.attemptBlockingInterrupt {
+           sessForUpd.sess.commit()
+           sessForUpd.sess.close()
+           sess.sess.commit()
+           sess.sess.close()
+         }
     _ <- repo.setState(TaskState(Wait))
     _ <- repo.clearTask
   } yield ()

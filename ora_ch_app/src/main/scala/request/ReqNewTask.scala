@@ -18,9 +18,13 @@ case class OneTable(
   sync_by_column_max: OptString = Option.empty[String],
   update_fields: OptString = Option.empty[String],
   sync_by_columns: OptString = Option.empty[String],
-  sync_update_by_column_max: OptString = Option.empty[String]
+  sync_update_by_column_max: OptString = Option.empty[String],
+  clr_ora_table_aft_upd: OptString = Option.empty[String]
 ) {
   // println(s"... DEBUG [OneTable] $operation where_filter.isEmpty=${where_filter.isEmpty}")
+
+  if (operation != Update && clr_ora_table_aft_upd.nonEmpty)
+    throw new Exception(s"$operation incompatible with non empty clr_ora_table_aft_upd.")
 
   if (operation == AppendNotIn && sync_by_columns.isEmpty)
     throw new Exception(s"$operation incompatible with empty sync_by_columns.")

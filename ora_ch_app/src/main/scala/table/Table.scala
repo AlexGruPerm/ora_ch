@@ -22,7 +22,8 @@ case class Table(
   sync_by_column_max: OptString,
   update_fields: OptString,
   sync_by_columns: OptString,
-  sync_update_by_column_max: OptString
+  sync_update_by_column_max: OptString,
+  clr_ora_table_aft_upd: OptString
 ) {
   println(s"Table constr: $pk_columns - $only_columns - $notnull_columns")
 
