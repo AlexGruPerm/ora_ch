@@ -214,8 +214,9 @@ object WServer {
     _                   <- ZIO.logInfo(s"updateWithTableDict rowCount = $rowCount")
     _                   <- sess.setTableCopied(table, rowCount)
     _                   <- sessCh.updateMergeTree(table, primaryKeyColumnsCh)
-    _                   <- sess.clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
-      .when(table.clr_ora_table_aft_upd.nonEmpty)
+    _                   <- sess
+                             .clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
+                             .when(table.clr_ora_table_aft_upd.nonEmpty)
   } yield rowCount
 
   private def closeSession(s: oraSessTask, table: Table): ZIO[Any, SQLException, Unit] = for {
