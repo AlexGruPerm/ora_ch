@@ -19,18 +19,32 @@ import table.Table
 import scala.collection.mutable
 import java.io.IOException
 import java.sql.SQLException
+import java.util.concurrent.TimeUnit
 
 object WServer {
 
   private def updatedCopiedRowsCount(
     table: Table,
     ora: oraSessTask,
-    ch: chSess,
-    maxValCnt: Option[MaxValAndCnt]
-  ): ZIO[Any, Exception, Long] = for {
+    //ch: chSess,
+    maxValCnt: Option[MaxValAndCnt],
+    begin: Long
+  ): ZIO[jdbcChSession, Exception, Long] = for {
+     jdbcCh <- ZIO.service[jdbcChSession]
+     zero   <- Clock.currentTime(TimeUnit.MILLISECONDS)
+     ch <- jdbcCh.sess(0)
+    start      <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _ <- ZIO.logInfo(s"Time of work updater: ${start - begin} ms.")
     copiedRows <- ch.getCountCopiedRows(table)
+    middle     <- Clock.currentTime(TimeUnit.MILLISECONDS)
     rowCount   <-
       ora.updateCountCopiedRows(table, copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L), "COPY")
+    finish     <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _          <-
+      // conn ${start-zero} = ms.
+      ZIO.logDebug(
+        s"DURR updatedCopiedRowsCount - conn = ${start - zero}  get ${middle - start} ms. update ${finish - middle} ms. rowCount = $rowCount"
+      )
   } yield rowCount
 
   private def updatedCopiedRowsCountFUpd(
@@ -38,7 +52,7 @@ object WServer {
     targetTable: Table,
     ora: oraSessTask,
     ch: chSess
-  ): ZIO[Any, Nothing, Long] = for {
+  ): ZIO[Any, SQLException, Long] = for {
     copiedRows <- ch.getCountCopiedRowsFUpd(targetTable)
     rowCount   <- ora.updateCountCopiedRows(srcTable, copiedRows, "CUPD")
   } yield rowCount
@@ -50,7 +64,7 @@ object WServer {
     table: Table
   ): ZIO[ImplTaskRepo, SQLException, Unit] =
     for {
-      _    <- sess.setTaskError(errorMsg, table)
+      _    <- sess.setTaskErrorSaveError(errorMsg, table)
       repo <- ZIO.service[ImplTaskRepo]
       _    <- repo.setState(TaskState(Wait))
       _    <- repo.clearTask
@@ -97,9 +111,11 @@ object WServer {
     table: Table,
     fetch_size: Int,
     batch_size: Int
-  ): ZIO[ImplTaskRepo, Throwable, Long] = for {
+  ): ZIO[ImplTaskRepo with jdbcChSession, Throwable, Long] = for {
     _            <- ZIO.logInfo(s"Begin copyTableEffect for ${table.name}")
     _            <- sess.setTableBeginCopy(table)
+    // jdbcCh <- ZIO.service[jdbcChSession]
+    // sessCh <- jdbcCh.sess(taskId)
     // Delete rows in ch before getMaxColForSync.
     _            <- sessCh
                       .deleteRowsFromChTable(table)
@@ -109,17 +125,32 @@ object WServer {
                       )
     maxValAndCnt <- sessCh.getMaxColForSync(table)
     _            <- ZIO.logDebug(s"maxValAndCnt = $maxValAndCnt")
-    appendKeys   <- getAppendKeys(sess, sessCh, table)
+    // appendKeys   <- getAppendKeys(sess, sessCh, table) //todo: open it
+    start <- Clock.currentTime(TimeUnit.MILLISECONDS)
     fiberUpdCnt  <-
-      updatedCopiedRowsCount(table, sessForUpd, sessCh, maxValAndCnt)
+      updatedCopiedRowsCount(table, sessForUpd, /*sessCh,*/ maxValAndCnt, start)
         .delay(2.second)
-        .repeat(Schedule.spaced(5.second))
-        // .onInterrupt(ZIO.logInfo("updatedCopiedRowsCount interrupted by copyTableEffect"))
+        .repeat(Schedule.spaced(2.second))
         .fork
-    _            <-
+    _  <-
       ZIO.logDebug(
         s"syncColMax = ${table.sync_by_column_max} syncUpdateColMax = ${table.sync_update_by_column_max}"
       )
+
+    createChTableScript <- sess.getCreateScript(table).when(table.operation == Recreate)
+
+    /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+    // todo: Take update of ora_to_ch_tasks_tables table from getDataResultSet !!!
+    rowCount <-
+      sessCh
+        .recreateTableCopyData(table, batch_size, fetch_size, maxValAndCnt, createChTableScript)
+        .tapError(er =>
+          ZIO.logError(s"recreateTableCopyData error - ${er.getMessage}") *>
+            saveError(sess, s"recreateTableCopyData error - ${er.getMessage}", Some(fiberUpdCnt), table)
+        )
+        .refineToOrDie[SQLException]
+
+    /*
     rs            = sess.getDataResultSet(taskId, table, fetch_size, maxValAndCnt, appendKeys)
     rowCount     <- sessCh
                       .recreateTableCopyData(table, rs, batch_size, maxValAndCnt)
@@ -128,10 +159,11 @@ object WServer {
                           saveError(sess, er.getMessage, Some(fiberUpdCnt), table)
                       )
                       .refineToOrDie[SQLException]
-    // _            <-
-    // fiberUpdCnt.interrupt
-    _            <- sess.setTableCopied(table, rowCount)
-    _            <-
+     */
+    /*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
+
+    _ <- sess.setTableCopied(table, rowCount)
+    _ <-
       ZIO.logInfo(
         s"taskId=[$taskId] copyTableEffect Finished for table = ${table.name} with rowsCount = $rowCount"
       )
@@ -234,11 +266,14 @@ object WServer {
   ): ZIO[ImplTaskRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
     _                       <- ZIO.logDebug(s" newtask = $newtask")
     oraSess                 <- ZIO.service[jdbcSession]
-    repo                    <- ZIO.service[ImplTaskRepo]
-    jdbcCh                  <- ZIO.service[jdbcChSession]
-    sess                    <- oraSess.sessTask()
+    start                   <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    sess                    <- oraSess.sessTask().tapError(er => ZIO.logError(s"startTask sessTask error: ${er.getMessage} ")) // insert into ora_to_ch_tasks
+    finish                  <- Clock.currentTime(TimeUnit.MILLISECONDS)
     taskId                  <- sess.getTaskIdFromSess
+    _                       <- ZIO.logDebug(s"taskId = $taskId inserted in ora_to_ch_tasks DURR: ${finish - start} ms.")
+    repo                    <- ZIO.service[ImplTaskRepo]
     _                       <- repo.setTaskId(taskId)
+    jdbcCh                  <- ZIO.service[jdbcChSession]
     t                       <- sess.getTables(newtask.schemas)
     wstask                   = WsTask(
                                  id = taskId,
@@ -252,6 +287,7 @@ object WServer {
     _                       <- repo.create(wstask)
     _                       <- repo.setState(TaskState(Executing))
     taskId                  <- repo.getTaskId
+    _                       <- ZIO.logInfo(s"This taskId must be = 0 taskId = $taskId")
     sessCh                  <- jdbcCh.sess(taskId)
     task                    <- repo.ref.get
     setSchemas               = task.tables.map(_.schema).toSet diff Set("system", "default", "information_schema")
@@ -282,7 +318,7 @@ object WServer {
                                              fetch_size,
                                              batch_size
                                            )
-                                         case _                                                  => ZIO.succeed(0L)
+                                         case _  => ZIO.succeed(0L)
                                        }
                                      )
                                        .refineToOrDie[SQLException] *>
@@ -393,7 +429,6 @@ object WServer {
    */
   private def errorCatcherForkedTask(
     taskEffect: ZIO[Any, Throwable, Unit]
-    // taskFiber: Fiber.Runtime[Throwable, Unit]
   ): ZIO[Any, Throwable, Unit] = for {
     fn        <- ZIO.fiberId.map(_.threadName)
     _         <- ZIO.logDebug(s"Error catcher started on $fn")
@@ -403,13 +438,21 @@ object WServer {
      * that, join on a fiber that fails will itself fail with the same error as the fiber
      */
     taskFiber <- taskEffect.fork
-    exitValue <- taskFiber.await
+    exitValue <- taskFiber.await.timeout(30.seconds)
     _         <- exitValue match {
-                   case Exit.Success(value) =>
+      case Some(ex) => ex match {
+                   case Exit.Success(_) =>
                      ZIO.logInfo(s"startTask completed successfully.")
                    case Exit.Failure(cause) =>
                      ZIO.logError(s"**** Fiber failed ****") *>
-                       ZIO.logError(s"${cause.prettyPrint}")
+                       ZIO.logError(s"${cause.prettyPrint}") *>
+                       ZIO.fail(
+                         new Exception(
+                           s"Fiber failed with: ${cause.map(th => th.getMessage)}"
+                         )
+                       )
+      }
+      case None =>  ZIO.fail(new Exception("Timeout taskFiber.await"))
                  }
     _         <- taskFiber.interrupt
   } yield ()

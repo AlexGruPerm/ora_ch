@@ -304,6 +304,25 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
 
 case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
 
+  def getCreateScript(table: Table): ZIO[Any, SQLException, String] = for {
+    script <- ZIO.attemptBlockingInterrupt {
+        val rs: ResultSet = sess.createStatement().executeQuery(
+          s"""
+             |select t.create_ch_script
+             |  from orach.ora_ch_data_tables_meta t
+             | where t.operation  = 'recreate' and
+             |       t.schema     = '${table.schema}' and
+             |       t.table_name = '${table.name}'
+             |""".stripMargin)
+          rs.next()
+        val sql = rs.getString("create_ch_script")
+        rs.close()
+      sql
+     }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
+  } yield script
+
+
   private def setContext(table: Table): Unit =
     if (table.curr_date_context.nonEmpty && table.analyt_datecalc.nonEmpty) {
       val currDateContext = table.curr_date_context.getOrElse(" ")
@@ -493,7 +512,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         .refineToOrDie[SQLException]
   } yield ()
 
-  def setTaskError(error: String, table: Table): ZIO[Any, SQLException, Unit] = for {
+  def setTaskErrorSaveError(error: String, table: Table): ZIO[Any, SQLException, Unit] = for {
     taskId <- getTaskIdFromSess
     errMsg  = s"${table.fullTableName()} $error"
     _      <-
@@ -549,7 +568,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         .refineToOrDie[SQLException]
   } yield ()
 
-  def updateCountCopiedRows(table: Table, rowCount: Long, oper: String): ZIO[Any, Nothing, Long] =
+  def updateCountCopiedRows(table: Table, rowCount: Long, oper: String): ZIO[Any, SQLException, Long] =
     for {
       taskId <- getTaskIdFromSess
       // _ <- ZIO.logInfo(s"updateCountCopiedRows ${table.fullTableName()} taskId=$taskId rowCount=$rowCount")
@@ -576,9 +595,9 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
           sess.commit()
           rs.close()
           rowCount
-        } /*.when(isSessAvail)*/
-          .tapError(er => ZIO.logError(er.getMessage))
-          .tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
+        }/*.retry(Schedule.recurs(3))*/.refineToOrDie[SQLException]
+          .tapError(er => ZIO.logError(s"ERROR updateCountCopiedRows ${er.getMessage}"))
+          //.tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
     } yield rows
 
   def clearOraTable(clearTable: String): ZIO[Any, SQLException, Unit] =
@@ -678,10 +697,14 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
                )
     _       <- ZIO.logInfo(s"sessTask taskIdOpt = $taskIdOpt")
     session <- if (taskIdOpt.getOrElse(0) == 0)
-                 oraConnectionTask()
+                 oraConnectionTask().timeout(30.seconds)
                else
-                 oraConnectionTaskEx(taskIdOpt)
-  } yield session
+                 oraConnectionTaskEx(taskIdOpt).timeout(30.seconds)
+    s <- session match {
+      case Some(conn) => ZIO.succeed(conn)
+      case None => ZIO.fail(new SQLException(s"Can not connect to oracle db. sessTask"))
+    }
+  } yield s
 
   def sessCalc(vqId: Int, debugMsg: String): ZIO[Any, SQLException, oraSessCalc] = for {
     _       <- ZIO.logInfo(s"[sessCalc] jdbcSessionImpl.sess [$debugMsg] call oraConnectionCalc")
@@ -708,6 +731,7 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
    */
   private def oraConnectionTask(): ZIO[Any, SQLException, oraSessTask] = for {
     oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
+
     sessEffect = ZIO.attemptBlockingInterrupt {
                    val conn                 = oraConn
                    conn.setAutoCommit(false)
@@ -723,9 +747,14 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
                    conn.commit()
                    conn.setClientInfo("OCSID.ACTION", s"taskid_$taskId")
                    oraSessTask(conn, taskId)
-                 }.tapError(er => ZIO.logError(er.getMessage))
-                   .refineToOrDie[SQLException]
-    sess      <- sessEffect
+                 }.timeout(5.seconds).refineToOrDie[SQLException]
+                 .tapError(er => ZIO.logError(s"oraConnectionTask [timeout or different error] error: ${er.getMessage}"))
+    optS <-      sessEffect
+    sessE      = optS match {
+                   case Some(s) => ZIO.succeed(s)
+                   case None => ZIO.fail(new SQLException(s"[orach - 1]Can not connect to oracle db. sessTask"))
+                 }
+    sess      <- sessE
     md         = sess.sess.getMetaData
     sid       <- ZIO.attemptBlockingInterrupt {
                    sess.getPid

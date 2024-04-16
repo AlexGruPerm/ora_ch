@@ -23,7 +23,7 @@ final case class OraConnRepoImpl(conf: OraServer, ref: Ref[BasicDataSource]) ext
   def getConnection(): ZIO[Any, Throwable, Connection] = for {
     r <- ref.get
   } yield r.getConnection
-  def getUrl(): ZIO[Any, Nothing, String]              = ZIO.succeed(conf.getUrl())
+  def getUrl(): ZIO[Any, Nothing, String] = ZIO.succeed(conf.getUrl())
 }
 
 /**

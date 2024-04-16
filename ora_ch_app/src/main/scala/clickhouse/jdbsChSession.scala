@@ -1,19 +1,19 @@
 package clickhouse
 
-import calc.{ CalcParams, ViewQueryMeta }
+import calc.{CalcParams, ViewQueryMeta}
 import column.OraChColumn
 import com.clickhouse.client.config.ClickHouseClientOption
 import com.clickhouse.client.http.config.HttpConnectionProvider
-import com.clickhouse.jdbc.{ ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver }
-import common.{ AppendRowsWQuery, LeftJoin, MergeTree, UpdateTableType }
+import com.clickhouse.jdbc.{ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver}
+import common.{AppendRowsWQuery, LeftJoin, MergeTree, UpdateTableType}
 import conf.ClickhouseServer
 import table._
-import zio.{ Clock, ZIO, ZLayer }
+import zio.{Clock, Schedule, ZIO, ZLayer}
 
-import java.sql.{ Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Types }
-import java.time.{ LocalDateTime, ZoneOffset }
+import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Types}
+import java.time.{LocalDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
-import java.util.{ Calendar, Properties }
+import java.util.{Calendar, Properties}
 import common.Types._
 import request.AppendWhere
 
@@ -229,20 +229,22 @@ case class chSess(sess: Connection, taskId: Int) {
   /**
    * return count of copied rows.
    */
-  def getCountCopiedRows(table: Table): ZIO[Any, Nothing, Long] = for {
-    rows <- ZIO.attemptBlockingInterrupt {
-              val rsRowCount = sess
-                .createStatement
-                // todo: for performance reason take this info from system.tables
-                // instead of from direct table.
-                .executeQuery(s"select count() as cnt from ${table.schema}.${table.name}")
-              rsRowCount.next()
-              val rowCount   = rsRowCount.getLong(1)
-              rowCount
-            }.refineToOrDie[SQLException] orElse ZIO.succeed(0L)
+  def getCountCopiedRows(table: Table): ZIO[Any, SQLException, Long] = for {
+    rows <- ZIO.attempt {
+      val rsRowCount = sess
+        .createStatement
+        .executeQuery(s""" select t.total_rows
+                         | from system.tables t
+                         | where t.database = '${table.schema}' and
+                         |      t.name      = '${table.name}' """.stripMargin)
+      rsRowCount.next()
+      val rowCount = rsRowCount.getLong(1)
+      //sess.close()
+      rowCount
+    }.refineToOrDie[SQLException] //orElse ZIO.succeed(0L)
   } yield rows
 
-  def getCountCopiedRowsFUpd(table: Table): ZIO[Any, Nothing, Long] = for {
+  def getCountCopiedRowsFUpd(table: Table): ZIO[Any, SQLException, Long] = for {
     rows <- ZIO.attempt {
               val rsRowCount = sess
                 .createStatement
@@ -253,7 +255,7 @@ case class chSess(sess: Connection, taskId: Int) {
               rsRowCount.next()
               val rowCount   = rsRowCount.getLong(1)
               rowCount
-            }.refineToOrDie[SQLException] orElse ZIO.succeed(0L)
+            }.refineToOrDie[SQLException] //orElse ZIO.succeed(0L)
   } yield rows
 
   private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
@@ -283,7 +285,70 @@ case class chSess(sess: Connection, taskId: Int) {
            )
   } yield ()
 
+
+  private def dropChTable(fullTableName: String): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.logInfo(s"dropChTable fullTableName = $fullTableName")
+    _  <- ZIO.attemptBlockingInterrupt {
+        sess.createStatement.executeQuery(s"drop table if exists $fullTableName")
+      }.refineToOrDie[SQLException]
+  } yield ()
+
+  private def createEmptyChTable(createChTableScript: Option[String]): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.logInfo(s"createEmptyChTable script = $createChTableScript")
+    _  <- ZIO.attemptBlockingInterrupt {
+            createChTableScript match {
+              case Some(query) =>  sess.createStatement.executeQuery(query)
+              case None => ()
+            }
+         }.refineToOrDie[SQLException]
+  } yield ()
+
+  private def recreate(table: Table, createChTableScript: Option[String]) : ZIO[Any, SQLException, Unit] = for {
+    _ <- dropChTable(table.fullTableName()).when(table.recreate == 1)
+    _ <- createEmptyChTable(createChTableScript).when(table.recreate == 1)
+  } yield ()
+
   def recreateTableCopyData(
+                             table: Table,
+                             batch_size: Int,
+                             fetch_size: Int,
+                             maxValCnt: Option[MaxValAndCnt],
+                             createChTableScript: Option[String]
+                           ): ZIO[Any, SQLException, Long] =
+    for {
+      start <- Clock.currentTime(TimeUnit.MILLISECONDS)
+      _ <- ZIO.logInfo(s"maxValCnt = $maxValCnt") //todo: remove
+      _ <- recreate(table,createChTableScript).when(table.recreate == 1)
+      rows  <- ZIO.attemptBlockingInterrupt {
+        val whereFilter: String = table.whereFilter()
+        val insertDataBridgeQuery: String =
+          s"""
+             |insert into ${table.schema}.${table.name}
+             |select ${table.only_columns.getOrElse("*").toUpperCase()}
+             |from jdbc('ora?fetch_size=$fetch_size&batch_size=$batch_size',
+             |          'select *
+             |             from ${table.schema}.${table.name}
+             |             $whereFilter '
+             |         )
+             |""".stripMargin
+        println(s"insertDataBridgeQuery = $insertDataBridgeQuery")
+        sess.createStatement.executeQuery(insertDataBridgeQuery)
+        val rsRowCnt = sess
+          .createStatement
+          .executeQuery(s"select sum(1) as cnt from ${table.schema}.${table.name}")//todo: use dict system.xxx
+        rsRowCnt.next()
+        val rowCount = rsRowCnt.getLong(1)
+        rsRowCnt.close()
+        rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
+      }.refineToOrDie[SQLException]
+      finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
+      _ <- ZIO.logInfo(
+      s"Copied $rows rows to ${table.schema}.${table.name} with ${finish - start} ms."
+      )
+    } yield rows
+
+  /*
+  def recreateTableCopyData_OLD(
     table: Table,
     rs: ZIO[Any, SQLException, ResultSet],
     batch_size: Int,
@@ -393,23 +458,13 @@ case class chSess(sess: Connection, taskId: Int) {
                             }
                             ps.addBatch()
                             if (counter == batch_size) {
-                              /*                              println(
-                                s"buildBatch = ${System.currentTimeMillis() - beforeBuildBatch} ms."
-                              )
-                              sumBuildBatch = sumBuildBatch + System.currentTimeMillis() - beforeBuildBatch
-                              beforeBuildBatch = System.currentTimeMillis()
-                              val beforeExecBatch = System.currentTimeMillis()*/
                               ps.executeBatch()
-                              /*                              println(
-                                s"executeBatch = ${System.currentTimeMillis() - beforeExecBatch} ms.  counter = $counter"
-                              )
-                              sumExecBatch = sumExecBatch + System.currentTimeMillis() - beforeExecBatch*/
                               0
                             } else
                               counter + 1
                           }
                           ps.executeBatch()
-                          val rsRowCount            = sess
+                          val rsRowCount = sess
                             .createStatement
                             .executeQuery(s"select sum(1) as cnt from ${table.schema}.${table.name}")
                           rsRowCount.next()
@@ -425,6 +480,7 @@ case class chSess(sess: Connection, taskId: Int) {
           s"Copied $rows rows to ${table.schema}.${table.name} with ${dtAfterCoping - dtBeforeCoping} ms."
         )
     } yield rows
+  */
 
   def recreateTmpTableForUpdate(
     table: Table,
@@ -671,23 +727,33 @@ trait jdbcChSession {
 case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
 
   def sess(taskId: Int): ZIO[Any, SQLException, chSess] = for {
-    session <- chConnection(taskId)
-    cnt      = props.keySet().size()
-    _       <- ZIO.logDebug(s"Connection has $cnt properties")
-    keys     = props.keySet().toArray.map(_.toString).toList
-    _       <- ZIO.foreachDiscard(keys)(k => ZIO.logDebug(s"$k - ${props.getProperty(k)}]"))
+    session <- chConnection(taskId).retry(Schedule.recurs(5))
+      .tapError(er => ZIO.logError(s"chConnection error : ${er.getMessage}"))
+    //cnt      = props.keySet().size()
+    //_       <- ZIO.logDebug(s"Connection has $cnt properties")
+    //keys     = props.keySet().toArray.map(_.toString).toList
+    //_       <- ZIO.foreachDiscard(keys)(k => ZIO.logDebug(s"$k - ${props.getProperty(k)}]"))
   } yield session
 
   override def chConnection(taskId: Int): ZIO[Any, SQLException, chSess] = for {
-    _    <- ZIO.unit
+    start <- Clock.currentTime(TimeUnit.MILLISECONDS)
     sess <- ZIO.attemptBlockingInterrupt {
               props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
-              props.setProperty("socket_timeout", "120000")      // property in ms. 120 seconds.
-              props.setProperty("dataTransferTimeout", "240000") // property in ms. 120 seconds.
+             // property in ms.
+              props.setProperty("connection_timeout", "720000")
+              props.setProperty("socket_timeout", "720000")
+              props.setProperty("dataTransferTimeout", "720000")
+              props.setProperty("timeToLiveMillis", "720000")
+              props.setProperty("socket_keepalive", "true")
               val dataSource                 = new ClickHouseDataSource(ch.getUrl, props)
               val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
               chSess(conn, taskId)
             }.refineToOrDie[SQLException]
+    finish  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _              <-
+      ZIO.logInfo(
+        s"chConnection ${finish - start} ms."
+      )
   } yield sess
 
 }
