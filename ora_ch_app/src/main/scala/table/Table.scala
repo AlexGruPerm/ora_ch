@@ -1,6 +1,6 @@
 package table
 
-import common.Types.OptString
+import common.Types.{MaxValAndCnt, OptString}
 import request.OperType
 
 /**
@@ -40,11 +40,15 @@ case class Table(
   def updateColumns(): String =
     update_fields.getOrElse("empty_update_fields")
 
-  def whereFilter(): String =
-    where_filter match {
-      case Some(filter) => s" where $filter"
-      case None         => " "
+  def whereFilter(maxValCnt: Option[MaxValAndCnt]): String = {
+
+    (where_filter,maxValCnt) match {
+      case (Some(filter),Some(sync)) => s" where $filter and ${sync_by_column_max.getOrElse("xxx")} > ${sync.MaxValue}  "
+      case (Some(filter),None) => s" where $filter "
+      case (None,Some(sync)) => s" where ${sync_by_column_max.getOrElse("xxx")} > ${sync.MaxValue}  "
+      case _         => s" "
     }
+  }
 
   def orderBy(): String =
     order_by_ora_data match {

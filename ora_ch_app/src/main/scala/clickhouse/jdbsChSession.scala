@@ -323,7 +323,7 @@ case class chSess(sess: Connection, taskId: Int) {
       _ <- ZIO.logInfo(s"recreateTableCopyData CNT_ROWS before coping = ${maxValCnt.map(_.CntRows).getOrElse(0L)}") //todo: remove
       _ <- recreate(table,createChTableScript).when(table.recreate == 1)
       rows  <- ZIO.attemptBlockingInterrupt {
-        val whereFilter: String = table.whereFilter()
+        val whereFilter: String = table.whereFilter(maxValCnt)
         val insertDataBridgeQuery: String =
           s"""
              |insert into ${table.schema}.${table.name}
@@ -331,7 +331,8 @@ case class chSess(sess: Connection, taskId: Int) {
              |from jdbc('ora?fetch_size=$fetch_size&batch_size=$batch_size',
              |          'select ${table.only_columns.getOrElse("*").toUpperCase()}
              |             from ${table.schema}.${table.name}
-             |             $whereFilter ${table.orderBy()}'
+             |             $whereFilter
+             |             ${table.orderBy()}'
              |         )
              |""".stripMargin
         println(s"insertDataBridgeQuery = $insertDataBridgeQuery")

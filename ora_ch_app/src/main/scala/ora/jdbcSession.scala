@@ -306,22 +306,22 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
 
   def getCreateScript(table: Table): ZIO[Any, SQLException, String] = for {
     script <- ZIO.attemptBlockingInterrupt {
-        val rs: ResultSet = sess.createStatement().executeQuery(
-          s"""
-             |select t.create_ch_script
-             |  from orach.ora_ch_data_tables_meta t
-             | where t.operation  = 'recreate' and
-             |       t.schema     = '${table.schema}' and
-             |       t.table_name = '${table.name}'
-             |""".stripMargin)
-          rs.next()
-        val sql = rs.getString("create_ch_script")
-        rs.close()
-      sql
-     }.tapError(er => ZIO.logError(er.getMessage))
-      .refineToOrDie[SQLException]
+                val rs: ResultSet = sess
+                  .createStatement()
+                  .executeQuery(s"""
+                                   |select t.create_ch_script
+                                   |  from orach.ora_ch_data_tables_meta t
+                                   | where t.operation  = 'recreate' and
+                                   |       t.schema     = '${table.schema}' and
+                                   |       t.table_name = '${table.name}'
+                                   |""".stripMargin)
+                rs.next()
+                val sql           = rs.getString("create_ch_script")
+                rs.close()
+                sql
+              }.tapError(er => ZIO.logError(er.getMessage))
+                .refineToOrDie[SQLException]
   } yield script
-
 
   private def setContext(table: Table): Unit =
     if (table.curr_date_context.nonEmpty && table.analyt_datecalc.nonEmpty) {
@@ -458,7 +458,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
    * in clickhouse. update_fields - fields that will updated in clickhouse table from oracle data.
    * where_filter - filter when select from oracle table. ins_select_order_by
    */
-  def getDataResultSetForUpdate(
+  /*  def getDataResultSetForUpdate(
     table: Table,
     fetch_size: Int,
     primaryKeyColumnsCh: List[String]
@@ -466,7 +466,6 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
     _            <- ZIO.unit
     selectColumns = s"${primaryKeyColumnsCh.mkString(",")},${table.updateColumns()} "
     rs           <- ZIO.attemptBlockingInterrupt {
-                      /// *+ ALL_ROWS */
                       val dataQuery                =
                         s"select  $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
                       println(s"getDataResultSetForUpdate dataQuery = $dataQuery")
@@ -480,6 +479,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                     }.tapError(er => ZIO.logError(er.getMessage))
                       .refineToOrDie[SQLException]
   } yield rs
+   */
 
   def saveTableList(tables: List[Table]): ZIO[Any, SQLException, Unit] = for {
     taskId           <- getTaskIdFromSess
@@ -522,7 +522,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
             s"""update ora_to_ch_tasks
                |   set state        = 'error',
                |       end_datetime = sysdate,
-               |       error_msg    = '${errMsg.substring(0,4000)}'
+               |       error_msg    = '${errMsg.take(4000)}'
                | where id = $taskId """.stripMargin
           )
         sess.commit()
@@ -571,7 +571,11 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         .refineToOrDie[SQLException]
   } yield ()
 
-  def updateCountCopiedRows(table: Table, rowCount: Long, oper: String): ZIO[Any, SQLException, Long] =
+  def updateCountCopiedRows(
+    table: Table,
+    rowCount: Long,
+    oper: String
+  ): ZIO[Any, SQLException, Long] =
     for {
       taskId <- getTaskIdFromSess
       rows   <-
@@ -596,9 +600,12 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
           sess.commit()
           rs.close()
           rowCount
-        }.tapError(er => ZIO.logError(s"ERROR - updateCountCopiedRows [${table.name}]: ${er.getMessage}"))
-          .tapDefect(df => ZIO.logError(s"DEFECT - updateCountCopiedRows [${table.name}]: ${df.toString}")) orElse
-          ZIO.succeed(0L) //todo: remove orElse
+        }.tapError(er =>
+          ZIO.logError(s"ERROR - updateCountCopiedRows [${table.name}]: ${er.getMessage}")
+        ).tapDefect(df =>
+          ZIO.logError(s"DEFECT - updateCountCopiedRows [${table.name}]: ${df.toString}")
+        ) orElse
+          ZIO.succeed(0L) // todo: remove orElse
     } yield rows
 
   def clearOraTable(clearTable: String): ZIO[Any, SQLException, Unit] =
@@ -615,26 +622,26 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
   def setTableCopied(table: Table, rowCount: Long): ZIO[Any, SQLException, Unit] =
     for {
       taskId <- getTaskIdFromSess
-      _ <- ZIO.logInfo(s"setTableCopied debug ora sid = ${getPid}")
-      _  <- ZIO.attemptBlockingInterrupt {
-          val query: String =
-            s""" update ora_to_ch_tasks_tables t
-               |   set end_datetime = sysdate,
-               |             state  = '${table.finishStatus()}',
-               |             copied_records_count = $rowCount,
-               |             speed_rows_sec = (case
-               |                                when ((sysdate - t.begin_datetime)*24*60*60) != 0
-               |                                then round($rowCount/((sysdate - t.begin_datetime)*24*60*60))
-               |                                else $rowCount
-               |                               end)
-               | where t.id_task     = $taskId and
-               |       t.schema_name = '${table.schema}' and
-               |       t.operation   = '${table.operation.operStr}' and
-               |       t.table_name  = '${table.name}' """.stripMargin
-          val rs: ResultSet = sess.createStatement.executeQuery(query)
-          sess.commit()
-          rs.close()
-        }.refineToOrDie[SQLException]
+      _      <- ZIO.logInfo(s"setTableCopied debug ora sid = ${getPid}")
+      _      <- ZIO.attemptBlockingInterrupt {
+                  val query: String =
+                    s""" update ora_to_ch_tasks_tables t
+                  |   set end_datetime = sysdate,
+                  |             state  = '${table.finishStatus()}',
+                  |             copied_records_count = $rowCount,
+                  |             speed_rows_sec = (case
+                  |                                when ((sysdate - t.begin_datetime)*24*60*60) != 0
+                  |                                then round($rowCount/((sysdate - t.begin_datetime)*24*60*60))
+                  |                                else $rowCount
+                  |                               end)
+                  | where t.id_task     = $taskId and
+                  |       t.schema_name = '${table.schema}' and
+                  |       t.operation   = '${table.operation.operStr}' and
+                  |       t.table_name  = '${table.name}' """.stripMargin
+                  val rs: ResultSet = sess.createStatement.executeQuery(query)
+                  sess.commit()
+                  rs.close()
+                }.refineToOrDie[SQLException]
     } yield ()
 
   def taskFinished: ZIO[Any, SQLException, Unit] = for {
@@ -661,11 +668,11 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
               t.name,
               t.curr_date_context,
               t.analyt_datecalc,
-              //t.pk_columns,
+              // t.pk_columns,
               t.only_columns,
-              //t.ins_select_order_by,
-              //t.partition_by,
-              //t.notnull_columns,
+              // t.ins_select_order_by,
+              // t.partition_by,
+              // t.notnull_columns,
               t.where_filter,
               t.sync_by_column_max,
               t.update_fields,
@@ -702,10 +709,10 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
                  oraConnectionTask().timeout(30.seconds)
                else
                  oraConnectionTaskEx(taskIdOpt).timeout(30.seconds)
-    s <- session match {
-      case Some(conn) => ZIO.succeed(conn)
-      case None => ZIO.fail(new SQLException(s"Can not connect to oracle db. sessTask"))
-    }
+    s       <- session match {
+                 case Some(conn) => ZIO.succeed(conn)
+                 case None       => ZIO.fail(new SQLException(s"Can not connect to oracle db. sessTask"))
+               }
   } yield s
 
   def sessCalc(vqId: Int, debugMsg: String): ZIO[Any, SQLException, oraSessCalc] = for {
@@ -732,7 +739,7 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
    * When new task created.
    */
   private def oraConnectionTask(): ZIO[Any, SQLException, oraSessTask] = for {
-    oraConn   <- oraRef.getConnection().refineToOrDie[SQLException]
+    oraConn <- oraRef.getConnection().refineToOrDie[SQLException]
 
     sessEffect = ZIO.attemptBlockingInterrupt {
                    val conn                 = oraConn
@@ -749,12 +756,18 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
                    conn.commit()
                    conn.setClientInfo("OCSID.ACTION", s"taskid_$taskId")
                    oraSessTask(conn, taskId)
-                 }.timeout(5.seconds).refineToOrDie[SQLException]
-                 .tapError(er => ZIO.logError(s"oraConnectionTask [timeout or different error] error: ${er.getMessage}"))
-    optS <-      sessEffect
+                 }.timeout(5.seconds)
+                   .refineToOrDie[SQLException]
+                   .tapError(er =>
+                     ZIO.logError(
+                       s"oraConnectionTask [timeout or different error] error: ${er.getMessage}"
+                     )
+                   )
+    optS      <- sessEffect
     sessE      = optS match {
                    case Some(s) => ZIO.succeed(s)
-                   case None => ZIO.fail(new SQLException(s"[orach - 1]Can not connect to oracle db. sessTask"))
+                   case None    =>
+                     ZIO.fail(new SQLException(s"[orach - 1]Can not connect to oracle db. sessTask"))
                  }
     sess      <- sessE
     md         = sess.sess.getMetaData
