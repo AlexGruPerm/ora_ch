@@ -5,7 +5,7 @@ import column.OraChColumn
 import com.clickhouse.client.config.ClickHouseClientOption
 import com.clickhouse.client.http.config.HttpConnectionProvider
 import com.clickhouse.jdbc.{ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver}
-import common.{AppendRowsWQuery, LeftJoin, MergeTree, UpdateTableType}
+import common.{AppendRowsWQuery, LeftJoin, MergeTree, SessTypeEnum, UpdateTableType}
 import conf.ClickhouseServer
 import table._
 import zio.{Clock, Schedule, ZIO, ZLayer}
@@ -229,7 +229,7 @@ case class chSess(sess: Connection, taskId: Int) {
   /**
    * return count of copied rows.
    */
-  def getCountCopiedRows(table: Table): ZIO[Any, SQLException, Long] = for {
+  def getCountCopiedRows(table: Table): ZIO[Any, Nothing/*SQLException*/, Long] = for {
     rows <- ZIO.attempt {
       val rsRowCount = sess
         .createStatement
@@ -239,9 +239,12 @@ case class chSess(sess: Connection, taskId: Int) {
                          |      t.name      = '${table.name}' """.stripMargin)
       rsRowCount.next()
       val rowCount = rsRowCount.getLong(1)
-      //sess.close()
       rowCount
-    }.refineToOrDie[SQLException] //orElse ZIO.succeed(0L)
+    }.tapError(er => ZIO.logError(s"ERROR - getCountCopiedRows : ${er.getMessage}"))
+      .tapDefect(df => ZIO.logError(s"DEFECT - getCountCopiedRows : ${df.toString}")) orElse
+      ZIO.succeed(0L)
+     //.refineToOrDie[SQLException]
+     //.refineToOrDie[SQLException] orElse ZIO.succeed(0L)
   } yield rows
 
   def getCountCopiedRowsFUpd(table: Table): ZIO[Any, SQLException, Long] = for {
@@ -317,7 +320,7 @@ case class chSess(sess: Connection, taskId: Int) {
                            ): ZIO[Any, SQLException, Long] =
     for {
       start <- Clock.currentTime(TimeUnit.MILLISECONDS)
-      _ <- ZIO.logInfo(s"maxValCnt = $maxValCnt") //todo: remove
+      _ <- ZIO.logInfo(s"recreateTableCopyData CNT_ROWS before coping = ${maxValCnt.map(_.CntRows).getOrElse(0L)}") //todo: remove
       _ <- recreate(table,createChTableScript).when(table.recreate == 1)
       rows  <- ZIO.attemptBlockingInterrupt {
         val whereFilter: String = table.whereFilter()
@@ -326,9 +329,9 @@ case class chSess(sess: Connection, taskId: Int) {
              |insert into ${table.schema}.${table.name}
              |select ${table.only_columns.getOrElse("*").toUpperCase()}
              |from jdbc('ora?fetch_size=$fetch_size&batch_size=$batch_size',
-             |          'select *
+             |          'select ${table.only_columns.getOrElse("*").toUpperCase()}
              |             from ${table.schema}.${table.name}
-             |             $whereFilter '
+             |             $whereFilter ${table.orderBy()}'
              |         )
              |""".stripMargin
         println(s"insertDataBridgeQuery = $insertDataBridgeQuery")
@@ -339,6 +342,7 @@ case class chSess(sess: Connection, taskId: Int) {
         rsRowCnt.next()
         val rowCount = rsRowCnt.getLong(1)
         rsRowCnt.close()
+        println(s"recreateTableCopyData INSERTED debug rowCount = $rowCount")
         rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
       }.refineToOrDie[SQLException]
       finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
@@ -482,7 +486,7 @@ case class chSess(sess: Connection, taskId: Int) {
     } yield rows
   */
 
-  def recreateTmpTableForUpdate(
+/*  def recreateTmpTableForUpdate(
     table: Table,
     rs: ZIO[Any, SQLException, ResultSet],
     batch_size: Int,
@@ -505,8 +509,8 @@ case class chSess(sess: Connection, taskId: Int) {
                                oraRs.getMetaData.getColumnDisplaySize(i),
                                oraRs.getMetaData.getPrecision(i),
                                oraRs.getMetaData.getScale(i),
-                               oraRs.getMetaData.isNullable(i),
-                               table.notnull_columns
+                               oraRs.getMetaData.isNullable(i)//,
+                               //table.notnull_columns
                              )
                            )
                            .toList
@@ -655,6 +659,9 @@ case class chSess(sess: Connection, taskId: Int) {
       _             <- ZIO.logInfo(s"Copied ${rowsWithQuery.copied} rows.")
     } yield rowsWithQuery.copied
 
+  */
+
+
   def createDatabases(schemas: Set[String]): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.unit
     _ <- ZIO.foreachDiscard(schemas) { schema =>
@@ -719,36 +726,37 @@ case class chSess(sess: Connection, taskId: Int) {
 }
 
 trait jdbcChSession {
-  def sess(taskId: Int): ZIO[Any, SQLException, chSess]
+  //def sess(taskId: Int): ZIO[Any, SQLException, chSess]
   val props = new Properties()
-  def chConnection(taskId: Int): ZIO[Any, SQLException, chSess]
+  def getClickHousePool(): ZIO[Any, SQLException, ClickHouseDataSource]
 }
 
 case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
 
-  def sess(taskId: Int): ZIO[Any, SQLException, chSess] = for {
-    session <- chConnection(taskId).retry(Schedule.recurs(5))
-      .tapError(er => ZIO.logError(s"chConnection error : ${er.getMessage}"))
-    //cnt      = props.keySet().size()
-    //_       <- ZIO.logDebug(s"Connection has $cnt properties")
-    //keys     = props.keySet().toArray.map(_.toString).toList
-    //_       <- ZIO.foreachDiscard(keys)(k => ZIO.logDebug(s"$k - ${props.getProperty(k)}]"))
-  } yield session
+/*  private val ds = {
+  }*/
 
-  override def chConnection(taskId: Int): ZIO[Any, SQLException, chSess] = for {
+  override def getClickHousePool(): ZIO[Any, SQLException, ClickHouseDataSource] = for {
     start <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _ <- ZIO.logInfo(s"chConnection at this time internally new Clickhouse connection pool created............ ")
     sess <- ZIO.attemptBlockingInterrupt {
-              props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
-             // property in ms.
-              props.setProperty("connection_timeout", "720000")
-              props.setProperty("socket_timeout", "720000")
-              props.setProperty("dataTransferTimeout", "720000")
-              props.setProperty("timeToLiveMillis", "720000")
-              props.setProperty("socket_keepalive", "true")
-              val dataSource                 = new ClickHouseDataSource(ch.getUrl, props)
-              val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
-              chSess(conn, taskId)
-            }.refineToOrDie[SQLException]
+      props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
+      // property in ms.
+      props.setProperty("connection_timeout", "10000000")
+      props.setProperty("socket_timeout", "10000000")
+      props.setProperty("dataTransferTimeout", "10000000")
+      props.setProperty("timeToLiveMillis", "10000000")
+      props.setProperty("socket_keepalive", "true")
+      props.setProperty("http_receive_timeout", "10000000")
+      props.setProperty("keep_alive_timeout", "10000000")
+      props.setProperty("user", ch.user);
+      props.setProperty("password", ch.password);
+      props.setProperty("client_name", "orach");
+      val dataSource :ClickHouseDataSource = new ClickHouseDataSource(ch.getUrl(), props)
+      //val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
+      //chSess(conn, taskId)
+      dataSource
+    }.refineToOrDie[SQLException]
     finish  <- Clock.currentTime(TimeUnit.MILLISECONDS)
     _              <-
       ZIO.logInfo(
@@ -756,11 +764,39 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
       )
   } yield sess
 
+  //todo: was moved to class constructor. Purpose: we need has one pool
+/*  override def chConnection(taskId: Int): ZIO[Any, SQLException, chSess] = for {
+    start <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _ <- ZIO.logInfo(s"chConnection at this time internally new Clickhouse connection pool created............ ")
+    sess <- ZIO.attemptBlockingInterrupt {
+      props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
+      // property in ms.
+      props.setProperty("connection_timeout", "720000")
+      props.setProperty("socket_timeout", "720000")
+      props.setProperty("dataTransferTimeout", "720000")
+      props.setProperty("timeToLiveMillis", "720000")
+      props.setProperty("socket_keepalive", "true")
+      val dataSource                 = new ClickHouseDataSource(ch.getUrl(), props)
+      val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
+      chSess(conn, taskId)
+    }.refineToOrDie[SQLException]
+    finish  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _              <-
+      ZIO.logInfo(
+        s"chConnection ${finish - start} ms."
+      )
+  } yield sess*/
+
+
+/*  def sess(taskId: Int): ZIO[Any, SQLException, chSess] = for {
+    session <- chConnection(taskId)
+  } yield session*/
+
 }
 
 object jdbcChSessionImpl {
 
-  val layer: ZLayer[ClickhouseServer, SQLException, jdbcChSession] =
+  val layer: ZLayer[ClickhouseServer with ClickhouseServer, SQLException, jdbcChSession] =
     ZLayer {
       for {
         chs <- ZIO.service[ClickhouseServer]

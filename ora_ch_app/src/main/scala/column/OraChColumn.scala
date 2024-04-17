@@ -1,5 +1,5 @@
 package column
-
+/*
 case class OraChColumn(
   name: String,
   typeName: String,
@@ -78,3 +78,4 @@ object OraChColumn {
 
   }
 }
+*/

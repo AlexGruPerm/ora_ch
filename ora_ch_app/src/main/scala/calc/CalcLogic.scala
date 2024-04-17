@@ -30,7 +30,11 @@ object CalcLogic {
     repo       <- ZIO.service[ImplCalcRepo]
     _          <- ZIO.logInfo(s"ch_table = ${meta.chTable} params_count = ${meta.params.size}")
     queryLogId <- ora.insertViewQueryLog(query, id_reload_calc)
-    ch         <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
+    //-------------------------
+    clickhouse   <- ZIO.service[jdbcChSession]
+    chPool       <- clickhouse.getClickHousePool()
+    ch           <- ZIO.succeed(chSess(chPool.getConnection,0))
+    //ch         <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
     calcQuery   = ch.truncateTable(meta) *>
                     ch.insertFromQuery(meta, query.params)
     _          <- calcQuery.tapError(er =>
@@ -48,7 +52,12 @@ object CalcLogic {
     queryLogId: Int
   ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
     _         <- ZIO.logInfo(s"Begin copyDataChOra for query_id = ${query.query_id} ${meta.chTable}")
-    ch        <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
+
+    clickhouse   <- ZIO.service[jdbcChSession]
+    chPool       <- clickhouse.getClickHousePool()
+    ch           <- ZIO.succeed(chSess(chPool.getConnection,0))
+    //ch        <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
+
     repo      <- ZIO.service[ImplCalcRepo]
     chTableRs <- ch.getChTableResultSet(meta)
     _         <- ora.saveBeginCopying(queryLogId)

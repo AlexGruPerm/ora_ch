@@ -425,7 +425,6 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                               case AppendNotIn => s" where $whereByFields "
                               case _           => " "
                             }}
-          ${table.ins_select_order_by.map(order => s" order by $order ").getOrElse(" ")}
         """.stripMargin
 
                         println(s"DEBUG_QUERY = $dataQuery")
@@ -472,10 +471,10 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                         s"select  $selectColumns from ${table.fullTableName()} ${table.whereFilter()}"
                       println(s"getDataResultSetForUpdate dataQuery = $dataQuery")
                       setContext(table)
-                      val dateQueryWithOrd: String = s"$dataQuery ${table.orderBy()}"
+                      //val dateQueryWithOrd: String = s"$dataQuery ${table.orderBy()}"
                       val dataRs                   = sess
                         .createStatement(java.sql.ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY)
-                        .executeQuery(dateQueryWithOrd)
+                        .executeQuery(dataQuery)
                       dataRs.setFetchSize(fetch_size)
                       dataRs
                     }.tapError(er => ZIO.logError(er.getMessage))
@@ -520,7 +519,11 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         val rsTask: ResultSet  = sess
           .createStatement
           .executeQuery(
-            s"update ora_to_ch_tasks set state='error',end_datetime=sysdate, error_msg='$errMsg' where id=$taskId "
+            s"""update ora_to_ch_tasks
+               |   set state        = 'error',
+               |       end_datetime = sysdate,
+               |       error_msg    = '${errMsg.substring(0,4000)}'
+               | where id = $taskId """.stripMargin
           )
         sess.commit()
         rsTask.close()
@@ -529,7 +532,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
           .executeQuery(
             s"""update ora_to_ch_tasks_tables t
                |set state = 'error',
-               |    end_datetime = sysdate
+               |    end_datetime     = sysdate
                | where t.id_task     = $taskId and
                |       t.schema_name = '${table.schema}' and
                |       t.operation   = '${table.operation.operStr}' and
@@ -571,8 +574,6 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
   def updateCountCopiedRows(table: Table, rowCount: Long, oper: String): ZIO[Any, SQLException, Long] =
     for {
       taskId <- getTaskIdFromSess
-      // _ <- ZIO.logInfo(s"updateCountCopiedRows ${table.fullTableName()} taskId=$taskId rowCount=$rowCount")
-      // isSessAvail <- ZIO.attemptBlockingInterrupt {sess.isClosed}
       rows   <-
         ZIO.attemptBlockingInterrupt {
           val query: String =
@@ -595,9 +596,9 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
           sess.commit()
           rs.close()
           rowCount
-        }/*.retry(Schedule.recurs(3))*/.refineToOrDie[SQLException]
-          .tapError(er => ZIO.logError(s"ERROR updateCountCopiedRows ${er.getMessage}"))
-          //.tapDefect(df => ZIO.logError(df.toString)) orElse ZIO.succeed(0L)
+        }.tapError(er => ZIO.logError(s"ERROR - updateCountCopiedRows [${table.name}]: ${er.getMessage}"))
+          .tapDefect(df => ZIO.logError(s"DEFECT - updateCountCopiedRows [${table.name}]: ${df.toString}")) orElse
+          ZIO.succeed(0L) //todo: remove orElse
     } yield rows
 
   def clearOraTable(clearTable: String): ZIO[Any, SQLException, Unit] =
@@ -614,8 +615,8 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
   def setTableCopied(table: Table, rowCount: Long): ZIO[Any, SQLException, Unit] =
     for {
       taskId <- getTaskIdFromSess
-      _      <-
-        ZIO.attemptBlockingInterrupt {
+      _ <- ZIO.logInfo(s"setTableCopied debug ora sid = ${getPid}")
+      _  <- ZIO.attemptBlockingInterrupt {
           val query: String =
             s""" update ora_to_ch_tasks_tables t
                |   set end_datetime = sysdate,
@@ -660,17 +661,18 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
               t.name,
               t.curr_date_context,
               t.analyt_datecalc,
-              t.pk_columns,
+              //t.pk_columns,
               t.only_columns,
-              t.ins_select_order_by,
-              t.partition_by,
-              t.notnull_columns,
+              //t.ins_select_order_by,
+              //t.partition_by,
+              //t.notnull_columns,
               t.where_filter,
               t.sync_by_column_max,
               t.update_fields,
               t.sync_by_columns,
               t.sync_update_by_column_max,
-              t.clr_ora_table_aft_upd
+              t.clr_ora_table_aft_upd,
+              t.order_by_ora_data
             )
           )
         }

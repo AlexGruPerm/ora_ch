@@ -13,19 +13,20 @@ case class Table(
   name: String,
   curr_date_context: OptString,
   analyt_datecalc: OptString,
-  pk_columns: String,
+  //pk_columns: String,
   only_columns: OptString,
-  ins_select_order_by: OptString,
-  partition_by: OptString,
-  notnull_columns: OptString,
+  //ins_select_order_by: OptString,
+  //partition_by: OptString,
+  //notnull_columns: OptString,
   where_filter: OptString,
   sync_by_column_max: OptString,
   update_fields: OptString,
   sync_by_columns: OptString,
   sync_update_by_column_max: OptString,
-  clr_ora_table_aft_upd: OptString
+  clr_ora_table_aft_upd: OptString,
+  order_by_ora_data: OptString
 ) {
-  println(s"Table constr: $pk_columns - $only_columns - $notnull_columns")
+  //println(s"Table constr: $pk_columns - $only_columns - $notnull_columns")
 
   def syncArity(): Int =
     sync_by_columns match {
@@ -46,7 +47,7 @@ case class Table(
     }
 
   def orderBy(): String =
-    ins_select_order_by match {
+    order_by_ora_data match {
       case Some(order) => s" order by $order"
       case None        => " "
     }
