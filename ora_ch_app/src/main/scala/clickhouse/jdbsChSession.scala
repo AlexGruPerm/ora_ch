@@ -316,21 +316,22 @@ case class chSess(sess: Connection, taskId: Int) {
                              batch_size: Int,
                              fetch_size: Int,
                              maxValCnt: Option[MaxValAndCnt],
-                             createChTableScript: Option[String]
+                             createChTableScript: Option[String],
+                             appendKeys: Option[List[Any]]
                            ): ZIO[Any, SQLException, Long] =
     for {
       start <- Clock.currentTime(TimeUnit.MILLISECONDS)
       _ <- ZIO.logInfo(s"recreateTableCopyData CNT_ROWS before coping = ${maxValCnt.map(_.CntRows).getOrElse(0L)}") //todo: remove
       _ <- recreate(table,createChTableScript).when(table.recreate == 1)
       rows  <- ZIO.attemptBlockingInterrupt {
-        val whereFilter: String = table.whereFilter(maxValCnt)
+        val whereFilter: String = table.whereFilter(maxValCnt,appendKeys)
         val insertDataBridgeQuery: String =
           s"""
-             |insert into ${table.schema}.${table.name}
+             |insert into ${table.fullTableName()}
              |select ${table.only_columns.getOrElse("*").toUpperCase()}
              |from jdbc('ora?fetch_size=$fetch_size&batch_size=$batch_size',
              |          'select ${table.only_columns.getOrElse("*").toUpperCase()}
-             |             from ${table.schema}.${table.name}
+             |             from ${table.fullTableName()}
              |             $whereFilter
              |             ${table.orderBy()}'
              |         )

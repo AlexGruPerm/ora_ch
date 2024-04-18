@@ -74,9 +74,9 @@ object WServer {
     } yield ()
 
   private def getAppendKeys(
-    sess: oraSessTask,
-    sessCh: chSess,
-    table: Table
+                             oraSession: oraSessTask,
+                             chSession: chSess,
+                             table: Table
   ): ZIO[ImplTaskRepo, SQLException, Option[List[Any]]] = for {
     appendKeys <- table.operation match {
                     case AppendNotIn =>
@@ -84,9 +84,9 @@ object WServer {
                         s"AppendNotIn for ${table.fullTableName()} with arity = ${table.syncArity()}"
                       ) *>
                         (table.syncArity() match {
-                          case 1 => sessCh.whereAppendInt1(table)
-                          case 2 => sessCh.whereAppendInt2(table)
-                          case 3 => sessCh.whereAppendInt3(table)
+                          case 1 => chSession.whereAppendInt1(table)
+                          case 2 => chSession.whereAppendInt2(table)
+                          case 3 => chSession.whereAppendInt3(table)
                           case _ => ZIO.none
                         }).refineToOrDie[SQLException]
                           .tapError(er =>
@@ -94,9 +94,9 @@ object WServer {
                               .logError(
                                 s"Error in one of sessCh.whereAppendIntX - ${er.getMessage}"
                               ) *>
-                              saveError(sess, er.getMessage, table)
+                              saveError(oraSession, er.getMessage, table)
                           )
-                    case _           => ZIO.none
+                    case _ => ZIO.none
                   }
   } yield appendKeys
 
@@ -135,7 +135,7 @@ object WServer {
                       )
 
     maxValAndCnt        <- chUpdateSession.getMaxColForSync(table)
-    // appendKeys   <- getAppendKeys(sess, sessCh, table) //todo: open it
+    appendKeys          <- getAppendKeys(oraSession, chUpdateSession, table)
     start               <- Clock.currentTime(TimeUnit.MILLISECONDS)
     createChTableScript <- oraSession.getCreateScript(table).when(table.operation == Recreate)
     _                   <- ZIO.logDebug(
@@ -150,7 +150,7 @@ object WServer {
     // todo: Take update of ora_to_ch_tasks_tables table from getDataResultSet !!!
     rowCountEff =
       chLoadSession
-        .recreateTableCopyData(table, batch_size, fetch_size, maxValAndCnt, createChTableScript)
+        .recreateTableCopyData(table, batch_size, fetch_size, maxValAndCnt, createChTableScript, appendKeys)
         .tapError { er =>
           ZIO.logError(s"recreateTableCopyData error - ${er.getMessage}") *>
             saveError(
