@@ -1,26 +1,18 @@
 package ora
 
-import calc.{ Query, VQParams, ViewQueryMeta }
+import calc.{Query, VQParams, ViewQueryMeta}
 import column.OraChColumn
 import zio._
 import conf.OraServer
 import oracle.jdbc.OracleDriver
-import request.{ AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable }
+import request.{AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable}
 import table.Table
 
-import java.sql.{
-  Clob,
-  Connection,
-  DriverManager,
-  PreparedStatement,
-  ResultSet,
-  SQLException,
-  Statement
-}
+import java.sql.{Clob, Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Statement}
 import java.util.Properties
 import common.Types._
 import OraChColumn._
-import common.{ ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum }
+import common.{ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum, UpdateStructsScripts}
 import connrepo.OraConnRepoImpl
 
 import java.util.concurrent.TimeUnit
@@ -544,6 +536,27 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
       }.tapError(er => ZIO.logError(er.getMessage))
         .refineToOrDie[SQLException]
   } yield ()
+
+
+  def getUpdTblDictScripts(table: Table): ZIO[Any, SQLException, UpdateStructsScripts] = for {
+    scripts <- ZIO.attemptBlockingInterrupt {
+        val rs: ResultSet = sess
+          .createStatement()
+          .executeQuery(s"""
+                           |select t.upd_table_script,
+                           |       t.dict_script_fupdate
+                           |  from orach.ora_ch_data_tables_meta t
+                           | where t.operation  = 'update' and
+                           |       t.schema     = '${table.schema}' and
+                           |       t.table_name = '${table.name}'
+                           |""".stripMargin)
+        rs.next()
+        val sqlScripts  = UpdateStructsScripts(rs.getString("upd_table_script"),rs.getString("dict_script_fupdate"))
+        rs.close()
+        sqlScripts
+      }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
+  } yield scripts
 
   def setTableBeginCopy(table: Table): ZIO[Any, SQLException, Unit] = for {
     taskId <- getTaskIdFromSess

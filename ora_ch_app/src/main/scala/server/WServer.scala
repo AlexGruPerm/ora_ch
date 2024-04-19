@@ -32,32 +32,23 @@ object WServer {
     // begin: Long
   ): ZIO[Any, Exception, Long] = for {
     // start      <- Clock.currentTime(TimeUnit.MILLISECONDS)
-    // _          <- ZIO.logInfo(s"Time of work updater: ${start - begin} ms. maxValCnt = $maxValCnt table = ${table.name}")
-/*    _          <- ZIO.logInfo(
-                    s" <fiber< updatedCopiedRowsCount DEBUG sid = ${oraSession.getPid} for ${table.name}"
-                  )*/
     copiedRows <- chSession.getCountCopiedRows(table)
-    // middle     <- Clock.currentTime(TimeUnit.MILLISECONDS)
     rowCount   <- oraSession.updateCountCopiedRows(
                     table,
                     copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L),
                     "COPY"
                   )
     // finish     <- Clock.currentTime(TimeUnit.MILLISECONDS)
-    // _          <-
-    //  ZIO.logDebug(
-    //    s"DURR updatedCopiedRowsCount - get ${middle - start} ms. update ${finish - middle} ms. rowCount = $rowCount"
-    //  )
   } yield rowCount
 
   private def updatedCopiedRowsCountFUpd(
     srcTable: Table,
     targetTable: Table,
-    ora: oraSessTask,
-    ch: chSess
+    oraSession: oraSessTask,
+    chSession: chSess
   ): ZIO[Any, SQLException, Long] = for {
-    copiedRows <- ch.getCountCopiedRowsFUpd(targetTable)
-    rowCount   <- ora.updateCountCopiedRows(srcTable, copiedRows, "CUPD")
+    copiedRows <- chSession.getCountCopiedRows(targetTable)
+    rowCount   <- oraSession.updateCountCopiedRows(srcTable, copiedRows, "CUPD")
   } yield rowCount
 
   private def saveError(
@@ -74,9 +65,9 @@ object WServer {
     } yield ()
 
   private def getAppendKeys(
-                             oraSession: oraSessTask,
-                             chSession: chSess,
-                             table: Table
+    oraSession: oraSessTask,
+    chSession: chSess,
+    table: Table
   ): ZIO[ImplTaskRepo, SQLException, Option[List[Any]]] = for {
     appendKeys <- table.operation match {
                     case AppendNotIn =>
@@ -96,7 +87,7 @@ object WServer {
                               ) *>
                               saveError(oraSession, er.getMessage, table)
                           )
-                    case _ => ZIO.none
+                    case _           => ZIO.none
                   }
   } yield appendKeys
 
@@ -108,7 +99,6 @@ object WServer {
                 s"interrupted by ${fibers.map(_.threadName).mkString(", ")}"
             )
     } yield ()
-
 
   // @nowarn
   private def copyTableEffect(
@@ -138,19 +128,29 @@ object WServer {
     appendKeys          <- getAppendKeys(oraSession, chUpdateSession, table)
     start               <- Clock.currentTime(TimeUnit.MILLISECONDS)
     createChTableScript <- oraSession.getCreateScript(table).when(table.operation == Recreate)
-    _                   <- ZIO.logDebug(
-               s"syncColMax = ${table.sync_by_column_max} syncUpdateColMax = ${table.sync_update_by_column_max}"
-              )
+    _                   <-
+      ZIO.logDebug(
+        s"syncColMax = ${table.sync_by_column_max} syncUpdateColMax = ${table.sync_update_by_column_max}"
+      )
 
     fiberUpdCnt = updatedCopiedRowsCount(table, oraSession, chUpdateSession, maxValAndCnt)
-                     .delay(5.second)
-                     .repeat(Schedule.spaced(5.second))
-                     .onInterrupt(debugInterruption("updatedCopiedRowsCount"))//todo: remove .onInterrupt(debugInterruption
+                    .delay(5.second)
+                    .repeat(Schedule.spaced(5.second))
+                    .onInterrupt(
+                      debugInterruption("updatedCopiedRowsCount")
+                    ) // todo: remove .onInterrupt(debugInterruption
 
     // todo: Take update of ora_to_ch_tasks_tables table from getDataResultSet !!!
     rowCountEff =
       chLoadSession
-        .recreateTableCopyData(table, batch_size, fetch_size, maxValAndCnt, createChTableScript, appendKeys)
+        .recreateTableCopyData(
+          table,
+          batch_size,
+          fetch_size,
+          maxValAndCnt,
+          createChTableScript,
+          appendKeys
+        )
         .tapError { er =>
           ZIO.logError(s"recreateTableCopyData error - ${er.getMessage}") *>
             saveError(
@@ -158,13 +158,14 @@ object WServer {
               s"recreateTableCopyData error - ${er.getMessage}",
               table
             )
-        }.refineToOrDie[SQLException]
+        }
+        .refineToOrDie[SQLException]
 
     rowCount <- fiberUpdCnt.disconnect race rowCountEff
-    _ <- ZIO.logInfo(s"RACE result rowCount = $rowCount")
-    _           <- oraSession.setTableCopied(table, rowCount)
-    finish      <- Clock.currentTime(TimeUnit.MILLISECONDS)
-    _           <-
+    _        <- ZIO.logInfo(s"RACE result rowCount = $rowCount")
+    _        <- oraSession.setTableCopied(table, rowCount)
+    finish   <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _        <-
       ZIO.logInfo(
         s"copyTableEffect=[$taskId] Finished [${table.name}] rows[$rowCount] ${finish - start} ms."
       )
@@ -179,7 +180,7 @@ object WServer {
    * ALTER TABLE TARGET_TABLE_FOR_UPDATE UPDATE .. = JOINGET(UPD_TABLE... WHERE 1>0;
    *
    * ***** Use it ONLY when whole table updated (all rows) ***** Otherwise: For example with
-   * ("where_filter":" 1>2 ") all updated fileds will be updated to NULL.
+   * ("where_filter":" 1>2 ") all updated fields will be updated to NULL.
    *
    * If only part of rows updated then use updateWithTableDict
    */
@@ -219,38 +220,60 @@ object WServer {
    * schema.xxx UPDATE ... = dictGet('schema.dict_xxx', 'val', (pk_columns_in_ch)) WHERE
    * dictHas('schema.dict_xxx', (pk_columns_in_ch));
    */
-  /*  private def updateWithTableDict(
-    //sessForUpd: oraSessTask,
-    sess: oraSessTask,
-    sessCh: chSess,
-    table: Table,
-    fetch_size: Int,
-    batch_size: Int
+  private def updateWithTableDict(
+                                   chUpdateSession: chSess,
+                                   @nowarn taskId: Int,
+                                   oraSession: oraSessTask,
+                                   chLoadSession: chSess,
+                                   table: Table,
+                                   fetch_size: Int,
+                                   batch_size: Int
   ): ZIO[ImplTaskRepo, Throwable, Long] = for {
-    _                   <- sess.setTableBeginCopy(table)
+    _                   <- oraSession.setTableBeginCopy(table)
     updateMergeTreeTable = s"upd_${table.name}"
     updateDictName       = s"dict_${table.name}"
-    primaryKeyColumnsCh <- sessCh.getPkColumns(table)
-    _                   <-
-      updatedCopiedRowsCountFUpd(table, table.copy(name = updateMergeTreeTable), sess, sessCh)
-        .delay(2.second)
+
+    updateStructsScripts <- oraSession.getUpdTblDictScripts(table)
+
+    primaryKeyColumnsCh <- chUpdateSession.getPkColumns(table)
+    fiberUpdCnt         = updatedCopiedRowsCountFUpd(
+                                        table,
+                                        table.copy(name = updateMergeTreeTable),
+                                        oraSession,
+                                        chUpdateSession
+                                      )
+        .delay(5.second)
         .repeat(Schedule.spaced(5.second))
-        // .onInterrupt(ZIO.logInfo("updateWithTableDict interrupted by copyTableEffect"))
-        .fork
-    rowCount            <- sessCh.recreateTmpTableForUpdate(
+      .onInterrupt(
+        debugInterruption("updatedCopiedRowsCountFUpd")
+      )
+    loadUpdDataEff = chLoadSession.prepareStructsForUpdate(
+                             updateStructsScripts,
                              table,
-                             sess.getDataResultSetForUpdate(table, fetch_size, primaryKeyColumnsCh),
                              batch_size,
-                             primaryKeyColumnsCh,
-                             MergeTree
-                           )
-    _                   <- ZIO.logInfo(s"updateWithTableDict rowCount = $rowCount")
-    _                   <- sess.setTableCopied(table, rowCount)
-    _                   <- sessCh.updateMergeTree(table, primaryKeyColumnsCh)
-    _                   <- sess
+                             fetch_size,
+                             primaryKeyColumnsCh
+                           ).tapError {er =>
+        ZIO.logError(s"prepareStructsForUpdate error - ${er.getMessage}") *>
+          saveError(
+            oraSession,
+            s"prepareStructsForUpdate error - ${er.getMessage}",
+            table
+          )
+      }
+      .refineToOrDie[SQLException]
+
+    rowCount <- fiberUpdCnt.disconnect race loadUpdDataEff
+
+    _                   <- oraSession.setTableCopied(table, rowCount)
+    _                   <- chLoadSession.updateMergeTree(table, primaryKeyColumnsCh)
+
+    //todo: open it, close for development purpose
+    /*_                   <- oraSession
                              .clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
                              .when(table.clr_ora_table_aft_upd.nonEmpty)
-  } yield rowCount*/
+    */
+  } yield rowCount
 
   private def closeSession(s: oraSessTask, table: Table): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
@@ -328,7 +351,7 @@ object WServer {
                                              fetch_size,
                                              batch_size
                                            )
-                                         case _  => ZIO.succeed(0L)
+                                         case _                                                  => ZIO.succeed(0L)
                                        }
                                      )
                                        .refineToOrDie[SQLException] *>
@@ -338,7 +361,7 @@ object WServer {
                                }
 
     // Only Updates
-    /*    operationsUpdates        = task.tables.filter(_.operation == Update).map { table =>
+    operationsUpdates        = task.tables.filter(_.operation == Update).map { table =>
                                  ZIO.logInfo(
                                    s"OPERATION [${table.operation}] FOR ${table.fullTableName()}"
                                  ) *> oraSess.sessTask(Some(taskId)).flatMap { s =>
@@ -347,9 +370,16 @@ object WServer {
                                        case Update =>
                                          // updateTableColumns - for update whole table (all rows).
                                          updateWithTableDict(
-                                           //sessForUpd,
+                                           chSess(
+                                             chPool.getConnection,
+                                             taskId
+                                           ), // ch connect for update
+                                           task.id,
                                            s,
-                                           commonChSession,
+                                           chSess(
+                                             chPool.getConnection,
+                                             taskId
+                                           ), // ch connect for load data
                                            table,
                                            fetch_size,
                                            batch_size
@@ -360,7 +390,7 @@ object WServer {
                                      .refineToOrDie[SQLException] *>
                                      closeSession(s, table)
                                  }
-                               }*/
+                               }
 
     _ <- if (wstask.parDegree <= 3) {
            // It's possible to have inserts,appendsXXX operations together with updates
@@ -368,14 +398,14 @@ object WServer {
            ZIO.logInfo(
              s"Data modification SEQUENTIALLY with ${wstask.parDegree}"
            ) *>
-             ZIO.collectAll(operationsExcludeUpdates) // *>
-           // ZIO.collectAll(operationsUpdates)
+             ZIO.collectAll(operationsExcludeUpdates) *>
+             ZIO.collectAll(operationsUpdates)
          } else
            ZIO.logInfo(
              s"Data modification PARALLEL with ${wstask.parDegree}"
            ) *>
-             ZIO.collectAllPar(operationsExcludeUpdates).withParallelism(wstask.parDegree - 1) // *>
-    // ZIO.collectAllPar(operationsUpdates).withParallelism(wstask.parDegree - 1)
+             ZIO.collectAllPar(operationsExcludeUpdates).withParallelism(wstask.parDegree - 1) *>
+             ZIO.collectAllPar(operationsUpdates).withParallelism(wstask.parDegree - 1)
     _ <- ZIO.logInfo(s"startTask FINISH oraSession.SID = ${oraSessTask.getPid} will be closed.")
     _ <- oraSessTask.taskFinished
     _ <- ZIO.attemptBlockingInterrupt {
