@@ -30,11 +30,10 @@ object CalcLogic {
     repo       <- ZIO.service[ImplCalcRepo]
     _          <- ZIO.logInfo(s"ch_table = ${meta.chTable} params_count = ${meta.params.size}")
     queryLogId <- ora.insertViewQueryLog(query, id_reload_calc)
-    //-------------------------
-    clickhouse   <- ZIO.service[jdbcChSession]
-    chPool       <- clickhouse.getClickHousePool()
-    ch           <- ZIO.succeed(chSess(chPool.getConnection,0))
-    //ch         <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
+    // -------------------------
+    clickhouse <- ZIO.service[jdbcChSession]
+    chPool     <- clickhouse.getClickHousePool()
+    ch         <- ZIO.succeed(chSess(chPool.getConnection, 0))
     calcQuery   = ch.truncateTable(meta) *>
                     ch.insertFromQuery(meta, query.params)
     _          <- calcQuery.tapError(er =>
@@ -51,26 +50,30 @@ object CalcLogic {
     ora: oraSessCalc,
     queryLogId: Int
   ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
-    _         <- ZIO.logInfo(s"Begin copyDataChOra for query_id = ${query.query_id} ${meta.chTable}")
+    _ <- ZIO.logInfo(s"Begin copyDataChOra for query_id = ${query.query_id} ${meta.chTable}")
 
-    clickhouse   <- ZIO.service[jdbcChSession]
-    chPool       <- clickhouse.getClickHousePool()
-    ch           <- ZIO.succeed(chSess(chPool.getConnection,0))
-    //ch        <- ZIO.serviceWithZIO[jdbcChSession](_.sess(0))
-
-    repo      <- ZIO.service[ImplCalcRepo]
-    chTableRs <- ch.getChTableResultSet(meta)
-    _         <- ora.saveBeginCopying(queryLogId)
-    _         <- ora.truncateTable(meta.oraSchema, meta.oraTable)
-    _         <- ora
-                   .insertRsDataInTable(chTableRs, meta.oraTable, meta.oraSchema)
+    clickhouse <- ZIO.service[jdbcChSession]
+    chPool     <- clickhouse.getClickHousePool()
+    ch         <- ZIO.succeed(chSess(chPool.getConnection, 0))
+    repo       <- ZIO.service[ImplCalcRepo]
+    // chTableRs  <- ch.getChTableResultSet(meta)
+    _          <- ora.saveBeginCopying(queryLogId)
+    _          <- ora.truncateTable(meta.oraSchema, meta.oraTable)
+    /*
+    _         <- ora.insertRsDataInTable(chTableRs, meta.oraTable, meta.oraSchema)
                    .tapError(er =>
                      ZIO.logError(s"insertRsDataInTable - ${er.getMessage}") *>
                        ora.saveCalcError(queryLogId, er.getMessage) *>
                        repo.clearCalc
-                   )
-    _         <- ora.saveEndCopying(queryLogId)
-    _         <-
+                   )*/
+    _          <- ch.copyTableChOra(meta)
+                    .tapError(er =>
+                      ZIO.logError(s"copyDataChOra - ${er.getMessage}") *>
+                        ora.saveCalcError(queryLogId, er.getMessage) *>
+                        repo.clearCalc
+                    )
+    _          <- ora.saveEndCopying(queryLogId, meta)
+    _          <-
       ZIO.logInfo(
         s"End copyDataChOra for query_id = ${query.query_id}"
       )

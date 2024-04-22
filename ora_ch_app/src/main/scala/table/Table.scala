@@ -1,7 +1,7 @@
 package table
 
-import common.Types.{MaxValAndCnt, OptString}
-import request.{AppendByMax, AppendNotIn, AppendWhere, OperType, Recreate, Update}
+import common.Types.{ MaxValAndCnt, OptString }
+import request.{ AppendByMax, AppendNotIn, AppendWhere, OperType, Recreate, Update }
 
 /**
  * Table or view
@@ -40,43 +40,48 @@ case class Table(
   def updateColumns(): String =
     update_fields.getOrElse("empty_update_fields")
 
-  //case Recreate | AppendWhere | AppendByMax | AppendNotIn =>
+  // case Recreate | AppendWhere | AppendByMax | AppendNotIn =>
   def whereFilter(maxValCnt: Option[MaxValAndCnt], appendKeys: Option[List[Any]]): String =
     operation match {
       case Recreate | AppendWhere | AppendByMax =>
         (where_filter, maxValCnt) match {
           case (Some(filter), Some(sync)) =>
-            s" where $filter and ${sync_by_column_max.getOrElse("xxx")} > ${sync.MaxValue}  "
+            if (sync.MaxValue > 0)
+              s" where $filter and ${sync_by_column_max.getOrElse("xxx")} > ${sync.MaxValue}  "
+            else
+              s" where $filter "
           case (Some(filter), None)       => s" where $filter "
           case (None, Some(sync))         =>
             s" where ${sync_by_column_max.getOrElse("xxx")} > ${sync.MaxValue}  "
           case _                          => s" "
         }
-      case AppendNotIn                    =>
-        val filterStr                 = s" ( ${sync_by_columns.getOrElse(" EMPTY_SYNC_BY_COLUMNS ")} ) "
+      case AppendNotIn                          =>
+        val filterStr           = s" ( ${sync_by_columns.getOrElse(" EMPTY_SYNC_BY_COLUMNS ")} ) "
         val nin_Filters: String = appendKeys match {
           case Some(appendKeysList) =>
             if (syncArity() == 1) {
               s"(${appendKeysList.mkString(",")})"
             } else if (syncArity() == 2) {
               s"""(${appendKeysList
-                .map(lst => s"(${lst.asInstanceOf[(Int, Int)].productIterator.toList.mkString(",")})")
-                .mkString(",")})"""
+                  .map(lst =>
+                    s"(${lst.asInstanceOf[(Int, Int)].productIterator.toList.mkString(",")})"
+                  )
+                  .mkString(",")})"""
             } else if (syncArity() == 3) {
               s"""(${appendKeysList
-                .map(lst =>
-                  s"(${lst.asInstanceOf[(Int, Int, Int)].productIterator.toList.mkString(",")})"
-                )
-                .mkString(",")})"""
+                  .map(lst =>
+                    s"(${lst.asInstanceOf[(Int, Int, Int)].productIterator.toList.mkString(",")})"
+                  )
+                  .mkString(",")})"""
             } else
               " "
-          case None => " "
+          case None                 => " "
         }
         if (appendKeys.nonEmpty)
-         s" where $filterStr not in $nin_Filters "
+          s" where $filterStr not in $nin_Filters "
         else
           " "
-      case Update => " "
+      case Update                               => " "
     }
 
   def orderBy(): String =

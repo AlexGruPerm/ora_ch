@@ -221,13 +221,13 @@ object WServer {
    * dictHas('schema.dict_xxx', (pk_columns_in_ch));
    */
   private def updateWithTableDict(
-                                   chUpdateSession: chSess,
-                                   @nowarn taskId: Int,
-                                   oraSession: oraSessTask,
-                                   chLoadSession: chSess,
-                                   table: Table,
-                                   fetch_size: Int,
-                                   batch_size: Int
+    chUpdateSession: chSess,
+    @nowarn taskId: Int,
+    oraSession: oraSessTask,
+    chLoadSession: chSess,
+    table: Table,
+    fetch_size: Int,
+    batch_size: Int
   ): ZIO[ImplTaskRepo, Throwable, Long] = for {
     _                   <- oraSession.setTableBeginCopy(table)
     updateMergeTreeTable = s"upd_${table.name}"
@@ -236,43 +236,45 @@ object WServer {
     updateStructsScripts <- oraSession.getUpdTblDictScripts(table)
 
     primaryKeyColumnsCh <- chUpdateSession.getPkColumns(table)
-    fiberUpdCnt         = updatedCopiedRowsCountFUpd(
-                                        table,
-                                        table.copy(name = updateMergeTreeTable),
-                                        oraSession,
-                                        chUpdateSession
-                                      )
-        .delay(5.second)
-        .repeat(Schedule.spaced(5.second))
-      .onInterrupt(
-        debugInterruption("updatedCopiedRowsCountFUpd")
-      )
-    loadUpdDataEff = chLoadSession.prepareStructsForUpdate(
-                             updateStructsScripts,
+    fiberUpdCnt          = updatedCopiedRowsCountFUpd(
                              table,
-                             batch_size,
-                             fetch_size,
-                             primaryKeyColumnsCh
-                           ).tapError {er =>
-        ZIO.logError(s"prepareStructsForUpdate error - ${er.getMessage}") *>
-          saveError(
-            oraSession,
-            s"prepareStructsForUpdate error - ${er.getMessage}",
-            table
-          )
-      }
-      .refineToOrDie[SQLException]
+                             table.copy(name = updateMergeTreeTable),
+                             oraSession,
+                             chUpdateSession
+                           )
+                             .delay(5.second)
+                             .repeat(Schedule.spaced(5.second))
+                             .onInterrupt(
+                               debugInterruption("updatedCopiedRowsCountFUpd")
+                             )
+    loadUpdDataEff       = chLoadSession
+                             .prepareStructsForUpdate(
+                               updateStructsScripts,
+                               table,
+                               batch_size,
+                               fetch_size,
+                               primaryKeyColumnsCh
+                             )
+                             .tapError { er =>
+                               ZIO.logError(s"prepareStructsForUpdate error - ${er.getMessage}") *>
+                                 saveError(
+                                   oraSession,
+                                   s"prepareStructsForUpdate error - ${er.getMessage}",
+                                   table
+                                 )
+                             }
+                             .refineToOrDie[SQLException]
 
     rowCount <- fiberUpdCnt.disconnect race loadUpdDataEff
 
-    _                   <- oraSession.setTableCopied(table, rowCount)
-    _                   <- chLoadSession.updateMergeTree(table, primaryKeyColumnsCh)
+    _ <- oraSession.setTableCopied(table, rowCount)
+    _ <- chLoadSession.updateMergeTree(table, primaryKeyColumnsCh)
 
-    //todo: open it, close for development purpose
+    // todo: open it, close for development purpose
     /*_                   <- oraSession
                              .clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
                              .when(table.clr_ora_table_aft_upd.nonEmpty)
-    */
+     */
   } yield rowCount
 
   private def closeSession(s: oraSessTask, table: Table): ZIO[Any, SQLException, Unit] = for {
@@ -622,24 +624,6 @@ object WServer {
       listOfListsQuery(mapOfQueues(queries)).map(query =>
         query.map(q => (q.query_id, getCalcAndCopyEffect(oraSess, q, reqCalc.id_reload_calc)))
       )
-
-    /*    // old code
-    calcsEffects =
-      listOfListsQuery(mapOfQueues(queries)).map(query =>
-        query.map(q =>
-          (
-            q.query_id,
-            oraSess.sessCalc(debugMsg = "calc - copyDataChOra").flatMap { s =>
-              CalcLogic.getCalcMeta(q, s).flatMap { meta =>
-                CalcLogic.startCalculation(q, meta, s, reqCalc.id_reload_calc).flatMap {
-                  queryLogId =>
-                    CalcLogic.copyDataChOra(q, meta, s, queryLogId)
-                }
-              }
-            }
-          )
-        )
-      )*/
 
     _ <- ZIO.foreachDiscard(calcsEffects) { lst =>
            ZIO.logInfo(s"parallel execution of ${lst.map(_._1).toList} ---------------") *>

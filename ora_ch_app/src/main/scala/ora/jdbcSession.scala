@@ -1,18 +1,24 @@
 package ora
 
-import calc.{Query, VQParams, ViewQueryMeta}
-import column.OraChColumn
+import calc.{ Query, VQParams, ViewQueryMeta }
 import zio._
 import conf.OraServer
 import oracle.jdbc.OracleDriver
-import request.{AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable}
+import request.{ AppendByMax, AppendNotIn, AppendWhere, Recreate, SrcTable }
 import table.Table
 
-import java.sql.{Clob, Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Statement}
+import java.sql.{
+  Clob,
+  Connection,
+  DriverManager,
+  PreparedStatement,
+  ResultSet,
+  SQLException,
+  Statement
+}
 import java.util.Properties
 import common.Types._
-import OraChColumn._
-import common.{ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum, UpdateStructsScripts}
+import common.{ ResultSetWithQuery, SessCalc, SessTask, SessTypeEnum, UpdateStructsScripts }
 import connrepo.OraConnRepoImpl
 
 import java.util.concurrent.TimeUnit
@@ -138,7 +144,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            .refineToOrDie[SQLException]
   } yield ()
 
-  def saveEndCopying(id: Int): ZIO[Any, SQLException, Unit] = for {
+  def saveEndCopying(id: Int, meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
            val query: String =
              s""" update ora_to_ch_query_log l
@@ -150,7 +156,8 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                 |         where cd.id_reload_calc    = l.id_reload_calc and
                 |               cd.id_query          = l.id_vq and
                 |               cd.analyt_datecalc   = to_number(replace(l.analyt_datecalc,'-',''))  and
-                |               cd.curr_date_context = to_number(replace(l.curr_date_context,'-','')))
+                |               cd.curr_date_context = to_number(replace(l.curr_date_context,'-',''))),
+                |   l.copied_rows = (select sum(1) from ${meta.oraSchema}.${meta.oraTable})
                 | where l.id = $id
                 | """.stripMargin
            val rs: ResultSet = sess.createStatement.executeQuery(query)
@@ -164,7 +171,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
   def getQueryMeta(queryId: Int): ZIO[Any, SQLException, ViewQueryMeta] = for {
     queryMeta <- ZIO.attemptBlockingInterrupt {
                    val queryVq                 =
-                     s""" select vq.ch_table,vq.ora_table,vq.query_text,vq.ch_schema,vq.ora_schema
+                     s""" select vq.ch_table,vq.ora_table,vq.query_text,vq.ch_schema,vq.ora_schema,vq.copy_ch_ora_columns
                         |  from ora_to_ch_query vq
                         | where vq.id = $queryId """.stripMargin
                    val rsVq: ResultSet         = sess.createStatement.executeQuery(queryVq)
@@ -200,7 +207,8 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                      optQueryStr,
                      vqParams,
                      rsVq.getString("ch_schema"),
-                     rsVq.getString("ora_schema")
+                     rsVq.getString("ora_schema"),
+                     rsVq.getString("copy_ch_ora_columns")
                    )
                    rsVq.close()
                    rsParams.close()
@@ -223,7 +231,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
          }
   } yield ()
 
-  def getColumnsFromRs(rs: ResultSet): ZIO[Any, SQLException, List[OraChColumn]] = for {
+  /*  def getColumnsFromRs(rs: ResultSet): ZIO[Any, SQLException, List[OraChColumn]] = for {
     _    <- debugRsColumns(rs)
     cols <- ZIO.attemptBlockingInterrupt {
               (1 to rs.getMetaData.getColumnCount)
@@ -242,9 +250,9 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                 .toList
             }.tapError(er => ZIO.logError(er.getMessage))
               .refineToOrDie[SQLException]
-  } yield cols
+  } yield cols*/
 
-  def insertRsDataInTable(
+  /*  def insertRsDataInTable(
     rs: ResultSet,
     tableName: String,
     oraSchema: String
@@ -290,7 +298,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
               // sess.close()
             }.tapError(er => ZIO.logError(er.getMessage))
               .refineToOrDie[SQLException]
-  } yield ()
+  } yield ()*/
 
 }
 
@@ -537,25 +545,27 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
         .refineToOrDie[SQLException]
   } yield ()
 
-
   def getUpdTblDictScripts(table: Table): ZIO[Any, SQLException, UpdateStructsScripts] = for {
     scripts <- ZIO.attemptBlockingInterrupt {
-        val rs: ResultSet = sess
-          .createStatement()
-          .executeQuery(s"""
-                           |select t.upd_table_script,
-                           |       t.dict_script_fupdate
-                           |  from orach.ora_ch_data_tables_meta t
-                           | where t.operation  = 'update' and
-                           |       t.schema     = '${table.schema}' and
-                           |       t.table_name = '${table.name}'
-                           |""".stripMargin)
-        rs.next()
-        val sqlScripts  = UpdateStructsScripts(rs.getString("upd_table_script"),rs.getString("dict_script_fupdate"))
-        rs.close()
-        sqlScripts
-      }.tapError(er => ZIO.logError(er.getMessage))
-      .refineToOrDie[SQLException]
+                 val rs: ResultSet = sess
+                   .createStatement()
+                   .executeQuery(s"""
+                                    |select t.upd_table_script,
+                                    |       t.dict_script_fupdate
+                                    |  from orach.ora_ch_data_tables_meta t
+                                    | where t.operation  = 'update' and
+                                    |       t.schema     = '${table.schema}' and
+                                    |       t.table_name = '${table.name}'
+                                    |""".stripMargin)
+                 rs.next()
+                 val sqlScripts    = UpdateStructsScripts(
+                   rs.getString("upd_table_script"),
+                   rs.getString("dict_script_fupdate")
+                 )
+                 rs.close()
+                 sqlScripts
+               }.tapError(er => ZIO.logError(er.getMessage))
+                 .refineToOrDie[SQLException]
   } yield scripts
 
   def setTableBeginCopy(table: Table): ZIO[Any, SQLException, Unit] = for {
