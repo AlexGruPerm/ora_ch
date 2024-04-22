@@ -270,11 +270,10 @@ object WServer {
     _ <- oraSession.setTableCopied(table, rowCount)
     _ <- chLoadSession.updateMergeTree(table, primaryKeyColumnsCh)
 
-    // todo: open it, close for development purpose
-    /*_                   <- oraSession
-                             .clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
-                             .when(table.clr_ora_table_aft_upd.nonEmpty)
-     */
+    _ <- oraSession
+           .clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
+           .when(table.clr_ora_table_aft_upd.nonEmpty && rowCount > 0L)
+
   } yield rowCount
 
   private def closeSession(s: oraSessTask, table: Table): ZIO[Any, SQLException, Unit] = for {
@@ -408,6 +407,7 @@ object WServer {
            ) *>
              ZIO.collectAllPar(operationsExcludeUpdates).withParallelism(wstask.parDegree - 1) *>
              ZIO.collectAllPar(operationsUpdates).withParallelism(wstask.parDegree - 1)
+
     _ <- ZIO.logInfo(s"startTask FINISH oraSession.SID = ${oraSessTask.getPid} will be closed.")
     _ <- oraSessTask.taskFinished
     _ <- ZIO.attemptBlockingInterrupt {
