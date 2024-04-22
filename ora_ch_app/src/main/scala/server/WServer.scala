@@ -411,8 +411,6 @@ object WServer {
     _ <- ZIO.logInfo(s"startTask FINISH oraSession.SID = ${oraSessTask.getPid} will be closed.")
     _ <- oraSessTask.taskFinished
     _ <- ZIO.attemptBlockingInterrupt {
-           // sessForUpd.sess.commit()
-           // sessForUpd.sess.close()
            oraSessTask.sess.commit()
            oraSessTask.sess.close()
          }
@@ -427,12 +425,14 @@ object WServer {
              .asString
              .map(_.fromJson[A])
              .catchAllDefect { case e: Exception =>
-               ZIO.logError(s"Error[3] parsing input file with : ${e.getMessage}") *>
-                 ZIO.succeed(Left(e.getMessage))
+               ZIO
+                 .logError(s"Error[3] parsing input file with : ${e.getMessage}")
+                 .as(Left(e.getMessage))
              }
              .catchAll { case e: Exception =>
-               ZIO.logError(s"Error[4] parsing input file with : ${e.getMessage}") *>
-                 ZIO.succeed(Left(e.getMessage))
+               ZIO
+                 .logError(s"Error[4] parsing input file with : ${e.getMessage}")
+                 .as(Left(e.getMessage))
              }
   } yield req
 
@@ -456,7 +456,6 @@ object WServer {
     for {
       repo       <- ZIO.service[ImplCalcRepo]
       currStatus <- repo.getState
-      // taskId     <- repo.getCalcId
       _          <- ZIO.logInfo(s"Repo currStatus = ${currStatus.state}")
       _          <- ZIO
                       .fail(
@@ -491,25 +490,6 @@ object WServer {
                        ZIO.logError(s"${cause.prettyPrint}")
                  }
     _         <- taskFiber.interrupt
-
-    /*    exitValue <- taskFiber.await.timeout(30.seconds) //Fuck off
-    _         <- exitValue match {
-                   case Some(ex) =>
-                     ex match {
-                       case Exit.Success(_)     =>
-                         ZIO.logInfo(s"startTask completed successfully.")
-                       case Exit.Failure(cause) =>
-                         ZIO.logError(s"**** Fiber failed ****") *>
-                           ZIO.logError(s"${cause.prettyPrint}") *>
-                           ZIO.fail(
-                             new Exception(
-                               s"Fiber failed with: ${cause.map(th => th.getMessage)}"
-                             )
-                           )
-                     }
-                   case None     => ZIO.fail(new Exception("Timeout taskFiber.await"))
-                 }
-    _         <- taskFiber.interrupt*/
   } yield ()
 
   private def task(
@@ -626,7 +606,7 @@ object WServer {
       )
 
     _ <- ZIO.foreachDiscard(calcsEffects) { lst =>
-           ZIO.logInfo(s"parallel execution of ${lst.map(_._1).toList} ---------------") *>
+           ZIO.logInfo(s"parallel execution of ${lst.map(_._1)} ") *>
              ZIO
                .collectAllPar(lst.map(_._2))
                .withParallelism(2 /*SEQ-PAR*/ )
@@ -642,7 +622,7 @@ object WServer {
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
     repo <- ZIO.service[ImplCalcRepo]
     _    <- currStatusCheckerCalc()
-    _    <- repo.create(ReqCalc(id = 111222333)) // todo: put here ora_to_ch_reload_calc.ID
+    _    <- repo.create(ReqCalc(id = reqCalc.id_reload_calc))
     _    <- repo.setState(CalcState(Executing))
     /**
      * We can use parallel execution only with degree =2. Because listOfListsQuery(mapOfQueues
@@ -657,30 +637,16 @@ object WServer {
                 ZLayer.succeed(SessCalc)
               )
               .forkDaemon
-
-    /* sched   = Schedule.spaced(1.second) && Schedule.recurs(waitSeconds)
-    calcId <-
-      repo
-        .getCalcId
-        .filterOrFail(_ != 0)(0.toString)
-        .retryOrElse(
-          sched,
-          (_: String, _: (Long, Long)) =>
-            ZIO.fail(new Exception(s"Elapsed wait time $waitSeconds seconds of getting calcId"))
-        )*/
   } yield Response.json(s"""{"calcId":"ok"}""").status(Status.Ok)
 
   private def calc(
-    req: Request // ,
-    // waitSeconds: Int
+    req: Request
   ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
-    // bodyText <- req.body.asString
-    // _        <- ZIO.logDebug(s"calc body = $bodyText")
     reqCalcE <- requestToEntity[ReqCalcSrc](req)
     _        <- ZIO.logDebug(s"JSON = $reqCalcE")
     resp     <- reqCalcE match {
                   case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
-                  case Right(src)    => calcAndCopy(src /*, waitSeconds*/ )
+                  case Right(src)    => calcAndCopy(src)
                 }
   } yield resp
 
@@ -704,7 +670,7 @@ object WServer {
         catchCover(task(req, waitSeconds).provideSome[ImplTaskRepo](ZLayer.succeed(SessTask)))
       },
       Method.POST / "calc"  -> handler { (req: Request) =>
-        catchCover(calc(req /*, waitSeconds*/ ).provideSome[ImplCalcRepo](ZLayer.succeed(SessCalc)))
+        catchCover(calc(req).provideSome[ImplCalcRepo](ZLayer.succeed(SessCalc)))
       },
       Method.GET / "random" -> handler(Random.nextString(10).map(Response.text(_))),
       Method.GET / "utc"    -> handler(Clock.currentDateTime.map(s => Response.text(s.toString))),
