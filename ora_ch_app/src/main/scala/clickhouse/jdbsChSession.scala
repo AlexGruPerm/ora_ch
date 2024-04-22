@@ -1,14 +1,13 @@
 package clickhouse
 
 import calc.{ CalcParams, ViewQueryMeta }
-import column.OraChColumn
 import com.clickhouse.client.config.ClickHouseClientOption
 import com.clickhouse.client.http.config.HttpConnectionProvider
 import com.clickhouse.jdbc.{ ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver }
-import common.{ AppendRowsWQuery, LeftJoin, MergeTree, UpdateTableType }
+import common.{ AppendRowsWQuery, SessTypeEnum, UpdateStructsScripts }
 import conf.ClickhouseServer
 import table._
-import zio.{ Clock, ZIO, ZLayer }
+import zio.{ Clock, Schedule, ZIO, ZLayer }
 
 import java.sql.{ Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Types }
 import java.time.{ LocalDateTime, ZoneOffset }
@@ -18,6 +17,7 @@ import common.Types._
 import request.AppendWhere
 
 import java.util.concurrent.TimeUnit
+import scala.annotation.nowarn
 
 case class chSess(sess: Connection, taskId: Int) {
 
@@ -50,38 +50,6 @@ case class chSess(sess: Connection, taskId: Int) {
                    .refineToOrDie[SQLException]
   } yield tblExists
 
-  def updateLeftJoin(
-    updateTable: Table,
-    updTable: Table,
-    primaryKeyColumnsCh: List[String]
-  ): ZIO[Any, SQLException, Unit] = for {
-    _ <- ZIO.attemptBlockingInterrupt {
-           val pkColsStr     = primaryKeyColumnsCh.mkString(",")
-           val updateColsSql = updateTable
-             .update_fields
-             .getOrElse("empty_update_fields")
-             .split(",")
-             .map { col =>
-               s"$col = joinGet(${updateTable.schema}.${updTable.name}, '$col', $pkColsStr)"
-             }
-             .mkString(",")
-           val updateQuery   =
-             s"""
-                |ALTER TABLE ${updateTable.schema}.${updateTable.name}
-                |UPDATE
-                |       $updateColsSql
-                |where 1>0;
-                |""".stripMargin
-           println(s"DEBUG updateLeftJoin = $updateQuery")
-           val rs            = sess.createStatement.executeQuery(updateQuery)
-           rs.close()
-           updateQuery
-         }.tapBoth(
-           er => ZIO.logError(er.getMessage),
-           update => ZIO.logDebug(s"updateColumns query = $update")
-         ).refineToOrDie[SQLException]
-  } yield ()
-
   def updateMergeTree(
     table: Table,
     primaryKeyColumnsCh: List[String]
@@ -105,13 +73,11 @@ case class chSess(sess: Connection, taskId: Int) {
                 |where dictHas('${table.schema}.$updateDictName', ($pkColsStr));
                 |""".stripMargin
 
-           println(s"DEBUG updateMergeTree = $updateQuery")
-
            val rs = sess.createStatement.executeQuery(updateQuery)
            rs.close()
            updateQuery
          }.tapBoth(
-           er => ZIO.logError(er.getMessage),
+           er => ZIO.logError(s"updateMergeTree ERROR - ${er.getMessage}"),
            update => ZIO.logDebug(s"updateColumns query = $update")
          ).refineToOrDie[SQLException]
   } yield ()
@@ -229,34 +195,25 @@ case class chSess(sess: Connection, taskId: Int) {
   /**
    * return count of copied rows.
    */
-  def getCountCopiedRows(table: Table): ZIO[Any, Nothing, Long] = for {
-    rows <- ZIO.attemptBlockingInterrupt {
-              val rsRowCount = sess
-                .createStatement
-                // todo: for performance reason take this info from system.tables
-                // instead of from direct table.
-                .executeQuery(s"select count() as cnt from ${table.schema}.${table.name}")
-              rsRowCount.next()
-              val rowCount   = rsRowCount.getLong(1)
-              rowCount
-            }.refineToOrDie[SQLException] orElse ZIO.succeed(0L)
-  } yield rows
-
-  def getCountCopiedRowsFUpd(table: Table): ZIO[Any, Nothing, Long] = for {
+  def getCountCopiedRows(table: Table): ZIO[Any, Nothing /*SQLException*/, Long] = for {
     rows <- ZIO.attempt {
               val rsRowCount = sess
                 .createStatement
                 .executeQuery(s""" select t.total_rows
                                  | from system.tables t
                                  | where t.database = '${table.schema}' and
-                                 |      t.name      = '${table.name}' """.stripMargin)
+                                 |       t.name      = '${table.name}' """.stripMargin)
               rsRowCount.next()
               val rowCount   = rsRowCount.getLong(1)
               rowCount
-            }.refineToOrDie[SQLException] orElse ZIO.succeed(0L)
+            }.tapError(er => ZIO.logError(s"ERROR - getCountCopiedRows : ${er.getMessage}"))
+              .tapDefect(df => ZIO.logError(s"DEFECT - getCountCopiedRows : ${df.toString}")) orElse
+              ZIO.succeed(0L)
+    // .refineToOrDie[SQLException]
+    // .refineToOrDie[SQLException] orElse ZIO.succeed(0L)
   } yield rows
 
-  private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
+  /*  private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
     _ <- ZIO.foreachDiscard(1 to rs.getMetaData.getColumnCount) { i =>
            ZIO.logTrace(s"""${rs.getMetaData.getColumnName(i).toLowerCase} -
                            |${rs.getMetaData.getColumnTypeName(i)} -
@@ -266,7 +223,7 @@ case class chSess(sess: Connection, taskId: Int) {
                            |${rs.getMetaData.getScale(i)}
                            |""".stripMargin)
          }
-  } yield ()
+  } yield ()*/
 
   def deleteRowsFromChTable(table: Table): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
@@ -283,155 +240,172 @@ case class chSess(sess: Connection, taskId: Int) {
            )
   } yield ()
 
+  private def dropChTable(fullTableName: String): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.logInfo(s"dropChTable fullTableName = $fullTableName")
+    _ <- ZIO.attemptBlockingInterrupt {
+           sess.createStatement.executeQuery(s"drop table if exists $fullTableName")
+         }.refineToOrDie[SQLException]
+  } yield ()
+
+  private def createEmptyChTable(
+    createChTableScript: Option[String]
+  ): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.logInfo(s"createEmptyChTable script = $createChTableScript")
+    _ <- ZIO.attemptBlockingInterrupt {
+           createChTableScript match {
+             case Some(query) => sess.createStatement.executeQuery(query)
+             case None        => ()
+           }
+         }.refineToOrDie[SQLException]
+  } yield ()
+
+  private def recreate(
+    table: Table,
+    createChTableScript: Option[String]
+  ): ZIO[Any, SQLException, Unit] = for {
+    _ <- dropChTable(table.fullTableName()).when(table.recreate == 1)
+    _ <- createEmptyChTable(createChTableScript).when(table.recreate == 1)
+  } yield ()
+
   def recreateTableCopyData(
     table: Table,
-    rs: ZIO[Any, SQLException, ResultSet],
     batch_size: Int,
-    maxValCnt: Option[MaxValAndCnt]
+    fetch_size: Int,
+    maxValCnt: Option[MaxValAndCnt],
+    createChTableScript: Option[String],
+    appendKeys: Option[List[Any]]
   ): ZIO[Any, SQLException, Long] =
     for {
-      _         <- ZIO.logInfo(
-                     s"recreateTableCopyData table : ${table.fullTableName()} batch_size = $batch_size"
-                   )
-      oraRs     <- rs
-      _         <- debugRsColumns(oraRs)
-      cols       = (1 to oraRs.getMetaData.getColumnCount)
-                     .map(i =>
-                       OraChColumn(
-                         oraRs.getMetaData.getColumnName(i).toLowerCase,
-                         oraRs.getMetaData.getColumnTypeName(i),
-                         oraRs.getMetaData.getColumnClassName(i),
-                         oraRs.getMetaData.getColumnDisplaySize(i),
-                         oraRs.getMetaData.getPrecision(i),
-                         oraRs.getMetaData.getScale(i),
-                         oraRs.getMetaData.isNullable(i),
-                         table.notnull_columns
-                       )
-                     )
-                     .toList
-      nakedCols  = cols.map(chCol => chCol.name).mkString(",\n")
-      colsScript = cols.map(chCol => chCol.clColumnString).mkString(",\n")
-      _         <- ZIO.logDebug(s"pk_columns = ${table.pk_columns}")
-
-      createScript =
-        s"""create table ${table.schema}.${table.name}
-           |(
-           | $colsScript
-           |) ENGINE = MergeTree()
-           | ${table.partition_by match {
-            case Some(part_by) => s"PARTITION BY ($part_by)"
-            case None          => " "
-          }}
-           | PRIMARY KEY (${table.pk_columns})
-           |""".stripMargin
-      _           <- ZIO.logDebug(s"createScript = $createScript")
-      insQuer      =
-        s"""insert into ${table.schema}.${table.name}
-           |select $nakedCols
-           |from
-           |input('$colsScript
-           |      ')
-           |""".stripMargin
-      _           <- ZIO.logDebug(s"insQuer = $insQuer")
-
-      _              <- ZIO.attemptBlockingInterrupt {
-                          sess
-                            .createStatement
-                            .executeQuery(s"drop table if exists ${table.schema}.${table.name}")
-                          sess.createStatement.executeQuery(createScript)
-                        }.tapError(er => ZIO.logError(er.getMessage))
-                          .refineToOrDie[SQLException]
-                          .when(table.recreate == 1)
-      dtBeforeCoping <- Clock.currentTime(TimeUnit.MILLISECONDS)
-      rows           <- ZIO.attemptBlockingInterrupt {
-                          val ps: PreparedStatement = sess.prepareStatement(insQuer)
-                          // var beforeBuildBatch      = System.currentTimeMillis()
-                          // var sumBuildBatch         = 0L
-                          // var sumExecBatch          = 0L
-                          Iterator.continually(oraRs).takeWhile(_.next()).foldLeft(1) { case (counter, rs) =>
-                            cols.foldLeft(1) { case (i, c) =>
-                              (c.typeName, c.scale) match {
-                                // -------------------------------------
-                                case ("NUMBER", 0)   =>
-                                  val l = rs.getLong(c.name)
-                                  if (rs.wasNull())
-                                    ps.setNull(i, Types.BIGINT)
-                                  else
-                                    ps.setLong(i, l)
-                                case ("NUMBER", _)   =>
-                                  val n = rs.getDouble(c.name)
-                                  if (rs.wasNull())
-                                    ps.setNull(i, Types.DOUBLE)
-                                  else
-                                    ps.setDouble(i, n)
-                                case ("CLOB", _)     => ps.setString(i, rs.getString(c.name))
-                                case ("VARCHAR2", _) =>
-                                  val s: String = rs.getString(c.name)
-                                  if (rs.wasNull())
-                                    ps.setNull(i, Types.VARCHAR)
-                                  else {
-                                    ps.setString(i, s)
-                                  }
-                                // ----------------------------------------------------------------
-                                case ("DATE", _)     =>
-                                  val tmp             = rs.getString(c.name)
-                                  val isNull: Boolean = rs.wasNull()
-                                  if (!isNull) {
-                                    val dateAsUnixtimestamp = dateTimeStringToEpoch(tmp)
-                                    if (dateAsUnixtimestamp <= 0L)
-                                      ps.setObject(i, "1971-01-01 00:00:00")
-                                    else {
-                                      if (dateAsUnixtimestamp >= 4296677295L)
-                                        ps.setObject(i, "2106-01-01 00:00:00")
-                                      else
-                                        ps.setObject(i, tmp)
-                                    }
-                                  } else
-                                    ps.setNull(i, Types.DATE)
-                              }
-                              i + 1
-                            }
-                            ps.addBatch()
-                            if (counter == batch_size) {
-                              /*                              println(
-                                s"buildBatch = ${System.currentTimeMillis() - beforeBuildBatch} ms."
-                              )
-                              sumBuildBatch = sumBuildBatch + System.currentTimeMillis() - beforeBuildBatch
-                              beforeBuildBatch = System.currentTimeMillis()
-                              val beforeExecBatch = System.currentTimeMillis()*/
-                              ps.executeBatch()
-                              /*                              println(
-                                s"executeBatch = ${System.currentTimeMillis() - beforeExecBatch} ms.  counter = $counter"
-                              )
-                              sumExecBatch = sumExecBatch + System.currentTimeMillis() - beforeExecBatch*/
-                              0
-                            } else
-                              counter + 1
-                          }
-                          ps.executeBatch()
-                          val rsRowCount            = sess
-                            .createStatement
-                            .executeQuery(s"select sum(1) as cnt from ${table.schema}.${table.name}")
-                          rsRowCount.next()
-                          val rowCount              = rsRowCount.getLong(1)
-                          rsRowCount.close()
-                          // println(s"sumBuildBatch = $sumBuildBatch ms.")
-                          // println(s"sumExecBatch = $sumExecBatch ms.")
-                          rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
-                        }.refineToOrDie[SQLException]
-      dtAfterCoping  <- Clock.currentTime(TimeUnit.MILLISECONDS)
-      _              <-
+      start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+      _      <-
         ZIO.logInfo(
-          s"Copied $rows rows to ${table.schema}.${table.name} with ${dtAfterCoping - dtBeforeCoping} ms."
-        )
+          s"recreateTableCopyData CNT_ROWS before coping = ${maxValCnt.map(_.CntRows).getOrElse(0L)}"
+        ) // todo: remove
+      _      <- recreate(table, createChTableScript).when(table.recreate == 1)
+      rows   <- ZIO.attemptBlockingInterrupt {
+                  val whereFilter: String           = table.whereFilter(maxValCnt, appendKeys)
+                  val insertDataBridgeQuery: String =
+                    s"""
+                     |insert into ${table.fullTableName()}
+                     |select ${table.only_columns.getOrElse("*").toUpperCase()}
+                     |from jdbc('ora?fetch_size=$fetch_size&batch_size=$batch_size',
+                     |          'select ${table.only_columns.getOrElse("*").toUpperCase()}
+                     |             from ${table.fullTableName()}
+                     |             $whereFilter
+                     |             ${table.orderBy()}'
+                     |         )
+                     |""".stripMargin
+                  println(s"insertDataBridgeQuery = $insertDataBridgeQuery")
+                  sess.createStatement.executeQuery(insertDataBridgeQuery)
+                  val rsRowCnt                      = sess
+                    .createStatement
+                    .executeQuery(
+                      s"select sum(1) as cnt from ${table.schema}.${table.name}"
+                    ) // todo: use dict system.xxx
+                  rsRowCnt.next()
+                  val rowCount = rsRowCnt.getLong(1)
+                  rsRowCnt.close()
+                  println(s"recreateTableCopyData INSERTED debug rowCount = $rowCount")
+                  rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
+                }.refineToOrDie[SQLException]
+      finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
+      _      <- ZIO.logInfo(
+                  s"Copied $rows rows to ${table.schema}.${table.name} with ${finish - start} ms."
+                )
     } yield rows
 
+  def prepareDictUpdTable(
+    dictName: String,
+    createDictScript: String,
+    tableName: String,
+    createUpdTblScript: String
+  ): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt {
+           sess.createStatement.executeQuery(s"drop dictionary if exists $dictName")
+           sess.createStatement.executeQuery(s"drop table if exists $tableName")
+           sess.createStatement.executeQuery(createUpdTblScript)
+           sess.createStatement.executeQuery(createDictScript)
+         }
+           .refineToOrDie[SQLException]
+  } yield ()
+
+  private def populateUpdTable(
+    updTableName: String,
+    table: Table,
+    fetch_size: Int,
+    batch_size: Int
+  ): ZIO[Any, SQLException, Long] = for {
+    start   <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    rowsCnt <- ZIO.attemptBlockingInterrupt {
+                 val whereFilter: String         =
+                   table.where_filter.map(flt => s" where $flt").getOrElse(" ")
+                 val scriptInsertIntoUpd: String =
+                   s"""
+                      |insert into $updTableName
+                      |select ${table.only_columns.getOrElse("*").toUpperCase}
+                      |from jdbc('ora?fetch_size=$fetch_size&batch_size=$batch_size',
+                      |          'select ${table.only_columns.getOrElse("*").toUpperCase}
+                      |             from ${table.fullTableName()}
+                      |             $whereFilter
+                      |             '
+                      |         )
+                      |""".stripMargin
+                 println(s"populateUpdTable = $scriptInsertIntoUpd")
+                 sess.createStatement.executeQuery(scriptInsertIntoUpd)
+                 val rsRowCnt                    = sess
+                   .createStatement
+                   .executeQuery(s"select sum(1) as cnt from $updTableName")
+                 rsRowCnt.next()
+                 val rowCount                    = rsRowCnt.getLong(1)
+                 rsRowCnt.close()
+                 rowCount
+               }.refineToOrDie[SQLException]
+    finish  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _       <-
+      ZIO.logInfo(s"populateUpdTable executed with ${finish - start} ms. inserted $rowsCnt rows.")
+  } yield rowsCnt
+
+  def prepareStructsForUpdate(
+    updateStructsScripts: UpdateStructsScripts,
+    table: Table,
+    fetch_size: Int,
+    batch_size: Int,
+    @nowarn pkColList: List[String]
+  ): ZIO[Any, SQLException, Long] =
+    for {
+      start       <- Clock.currentTime(TimeUnit.MILLISECONDS)
+      updTableName = s"${table.schema}.upd_${table.name}"
+      updDictName  = s"${table.schema}.dict_${table.name}"
+      _           <- prepareDictUpdTable(
+                       updDictName,
+                       updateStructsScripts.dictScript,
+                       updTableName,
+                       updateStructsScripts.updTableScript
+                     )
+      cntRows     <- populateUpdTable(updTableName, table, fetch_size, batch_size)
+    } yield cntRows
+
+  def copyTableChOra(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
+    start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <- ZIO.attemptBlockingInterrupt {
+                val copyJdbcScript: String =
+                  s"""
+                |insert into ${meta.oraSchema}.${meta.oraTable}(${meta.copyChOraColumns})
+                |select ${meta.copyChOraColumns}
+                |from   ${meta.chSchema}.${meta.chTable}
+                |""".stripMargin
+                sess.createStatement.executeQuery(copyJdbcScript)
+              }.refineToOrDie[SQLException]
+    finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <- ZIO.logInfo(s"copyTableChOra (ch -> ora) executed with ${finish - start} ms.")
+  } yield ()
+
+  /*  //todo: delete it
   def recreateTmpTableForUpdate(
     table: Table,
     rs: ZIO[Any, SQLException, ResultSet],
     batch_size: Int,
-    pkColList: List[String],
-    tableType: UpdateTableType
+    pkColList: List[String]
   ): ZIO[Any, SQLException, Long] =
     for {
       _               <- ZIO.unit
@@ -449,8 +423,8 @@ case class chSess(sess: Connection, taskId: Int) {
                                oraRs.getMetaData.getColumnDisplaySize(i),
                                oraRs.getMetaData.getPrecision(i),
                                oraRs.getMetaData.getScale(i),
-                               oraRs.getMetaData.isNullable(i),
-                               table.notnull_columns
+                               oraRs.getMetaData.isNullable(i)//,
+                               //table.notnull_columns
                              )
                            )
                            .toList
@@ -459,20 +433,12 @@ case class chSess(sess: Connection, taskId: Int) {
       pkColumns        = pkColList.mkString(",")
       updTableFullName = s"${table.schema}.$updTableName"
 
-      createScript = tableType match {
-                       case LeftJoin  =>
-                         s"""create table $updTableFullName
-                            |(
-                            | $colsScript
-                            |) ENGINE = Join(ANY, LEFT, $pkColumns) SETTINGS join_use_nulls = 1
-                            |""".stripMargin
-                       case MergeTree =>
-                         s"""create table $updTableFullName
+      createScript = s"""create table $updTableFullName
                             |(
                             | $colsScript
                             |) ENGINE = MergeTree PRIMARY KEY ($pkColumns)
                             |""".stripMargin
-                     }
+
       _           <- ZIO.logDebug(s"update temp table SCRIPT : $createScript")
 
       insertQuery =
@@ -597,7 +563,7 @@ case class chSess(sess: Connection, taskId: Int) {
                          rq => ZIO.logDebug(s"recreateTableCopyDataForUpdate insert = ${rq.query}")
                        ).refineToOrDie[SQLException]
       _             <- ZIO.logInfo(s"Copied ${rowsWithQuery.copied} rows.")
-    } yield rowsWithQuery.copied
+    } yield rowsWithQuery.copied*/
 
   def createDatabases(schemas: Set[String]): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.unit
@@ -663,38 +629,79 @@ case class chSess(sess: Connection, taskId: Int) {
 }
 
 trait jdbcChSession {
-  def sess(taskId: Int): ZIO[Any, SQLException, chSess]
+  // def sess(taskId: Int): ZIO[Any, SQLException, chSess]
   val props = new Properties()
-  def chConnection(taskId: Int): ZIO[Any, SQLException, chSess]
+  def getClickHousePool(): ZIO[Any, SQLException, ClickHouseDataSource]
 }
 
 case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
 
-  def sess(taskId: Int): ZIO[Any, SQLException, chSess] = for {
-    session <- chConnection(taskId)
-    cnt      = props.keySet().size()
-    _       <- ZIO.logDebug(s"Connection has $cnt properties")
-    keys     = props.keySet().toArray.map(_.toString).toList
-    _       <- ZIO.foreachDiscard(keys)(k => ZIO.logDebug(s"$k - ${props.getProperty(k)}]"))
-  } yield session
+  /*  private val ds = {
+  }*/
 
-  override def chConnection(taskId: Int): ZIO[Any, SQLException, chSess] = for {
-    _    <- ZIO.unit
-    sess <- ZIO.attemptBlockingInterrupt {
-              props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
-              props.setProperty("socket_timeout", "120000")      // property in ms. 120 seconds.
-              props.setProperty("dataTransferTimeout", "240000") // property in ms. 120 seconds.
-              val dataSource                 = new ClickHouseDataSource(ch.getUrl, props)
-              val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
-              chSess(conn, taskId)
-            }.refineToOrDie[SQLException]
+  override def getClickHousePool(): ZIO[Any, SQLException, ClickHouseDataSource] = for {
+    start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <-
+      ZIO.logInfo(
+        s"chConnection at this time internally new Clickhouse connection pool created............ "
+      )
+    sess   <- ZIO.attemptBlockingInterrupt {
+                props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
+                // property in ms.
+                props.setProperty("connection_timeout", "10000000")
+                props.setProperty("socket_timeout", "10000000")
+                props.setProperty("dataTransferTimeout", "10000000")
+                props.setProperty("timeToLiveMillis", "10000000")
+                props.setProperty("socket_keepalive", "true")
+                props.setProperty("http_receive_timeout", "10000000")
+                props.setProperty("keep_alive_timeout", "10000000")
+                props.setProperty("user", ch.user);
+                props.setProperty("password", ch.password);
+                props.setProperty("client_name", "orach");
+                val dataSource: ClickHouseDataSource = new ClickHouseDataSource(ch.getUrl(), props)
+                // val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
+                // chSess(conn, taskId)
+                dataSource
+              }.refineToOrDie[SQLException]
+    finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <-
+      ZIO.logInfo(
+        s"chConnection ${finish - start} ms."
+      )
   } yield sess
+
+  // todo: was moved to class constructor. Purpose: we need has one pool
+  /*  override def chConnection(taskId: Int): ZIO[Any, SQLException, chSess] = for {
+    start <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _ <- ZIO.logInfo(s"chConnection at this time internally new Clickhouse connection pool created............ ")
+    sess <- ZIO.attemptBlockingInterrupt {
+      props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
+      // property in ms.
+      props.setProperty("connection_timeout", "720000")
+      props.setProperty("socket_timeout", "720000")
+      props.setProperty("dataTransferTimeout", "720000")
+      props.setProperty("timeToLiveMillis", "720000")
+      props.setProperty("socket_keepalive", "true")
+      val dataSource                 = new ClickHouseDataSource(ch.getUrl(), props)
+      val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
+      chSess(conn, taskId)
+    }.refineToOrDie[SQLException]
+    finish  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _              <-
+      ZIO.logInfo(
+        s"chConnection ${finish - start} ms."
+      )
+  } yield sess*/
+
+  /*  def sess(taskId: Int): ZIO[Any, SQLException, chSess] = for {
+    session <- chConnection(taskId)
+  } yield session*/
 
 }
 
 object jdbcChSessionImpl {
 
-  val layer: ZLayer[ClickhouseServer, SQLException, jdbcChSession] =
+  val layer: ZLayer[ClickhouseServer with ClickhouseServer, SQLException, jdbcChSession] =
     ZLayer {
       for {
         chs <- ZIO.service[ClickhouseServer]

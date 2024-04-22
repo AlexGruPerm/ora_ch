@@ -59,7 +59,7 @@ ThisBuild / scalaVersion := "2.13.10"
       val dbcp2             = "org.apache.commons" % "commons-dbcp2" % Versions.apacheDbcp2
 
       val zioDep = List(zio, zio_conf, zio_conf_typesafe, zio_conf_magnolia, zio_http, zio_json)
-      val chDep = List(chHttpClient,apacheHttpClient, ch, slf4j, log4j, lz4, orai18n, dbcp2)
+      val chDep = List(ch,chHttpClient,apacheHttpClient, slf4j, log4j, lz4, orai18n, dbcp2)
     }
 
   val commonDependencies = {

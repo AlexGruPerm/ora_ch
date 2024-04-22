@@ -12,5 +12,6 @@ case class ViewQueryMeta(
   query: Option[String],
   params: Set[VQParams],
   chSchema: String,
-  oraSchema: String
+  oraSchema: String,
+  copyChOraColumns: String
 )

@@ -9,17 +9,18 @@ case class OneTable(
   name: String,
   curr_date_context: OptString = Option.empty[String],
   analyt_datecalc: OptString = Option.empty[String],
-  pk_columns: String,
+  // pk_columns: String,
   only_columns: OptString = Option.empty[String],
-  ins_select_order_by: OptString = Option.empty[String],
-  partition_by: OptString = Option.empty[String],
-  notnull_columns: OptString = Option.empty[String],
+  // ins_select_order_by: OptString = Option.empty[String],
+  // partition_by: OptString = Option.empty[String],
+  // notnull_columns: OptString = Option.empty[String],
   where_filter: OptString = Option.empty[String],
   sync_by_column_max: OptString = Option.empty[String],
   update_fields: OptString = Option.empty[String],
   sync_by_columns: OptString = Option.empty[String],
   sync_update_by_column_max: OptString = Option.empty[String],
-  clr_ora_table_aft_upd: OptString = Option.empty[String]
+  clr_ora_table_aft_upd: OptString = Option.empty[String],
+  order_by_ora_data: OptString = Option.empty[String]
 ) {
   // println(s"... DEBUG [OneTable] $operation where_filter.isEmpty=${where_filter.isEmpty}")
 

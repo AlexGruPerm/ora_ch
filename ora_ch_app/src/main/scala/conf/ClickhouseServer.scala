@@ -8,6 +8,6 @@ case class ClickhouseServer(
   user: String,
   password: String
 ) {
-  def getUrl: String =
+  def getUrl(): String =
     s"jdbc:clickhouse:http://$ip:$port/$db"
 }

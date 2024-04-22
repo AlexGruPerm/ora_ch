@@ -14,7 +14,7 @@ object MainApp extends ZIOAppDefault {
    */
   def app: ZIO[Any, Throwable, Nothing] = ZIO
     .withLogger(ZLogger.default.map(println(_)).filterLogLevel(_ >= LogLevel.Debug)) {
-      (Server.install(WServer.app(30)).flatMap { port =>
+      (Server.install(WServer.app(60)).flatMap { port =>
         ZIO.logInfo(s"Started server on port: $port")
       } *> ZIO.never)
         .provide(ImplCalcRepo.layer, ImplTaskRepo.layer, Server.defaultWithPort(8081))
