@@ -132,9 +132,6 @@ object WServer {
                 }
   } yield resp
 
-  private def getMainPage: ZIO[Any, IOException, Response] =
-    ZIO.fail(new IOException("error text in IOException"))
-
   private def ZioResponseMsgBadRequest(message: String): ZIO[Any, Nothing, Response] =
     ZIO.succeed(Response.json(ResponseMessage(message).toJson).status(Status.InternalServerError))
 
