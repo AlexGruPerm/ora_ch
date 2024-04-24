@@ -473,8 +473,6 @@ object WServer {
   private def errorCatcherForkedTask(
     taskEffect: ZIO[Any, Throwable, Unit]
   ): ZIO[Any, Throwable, Unit] = for {
-    fn        <- ZIO.fiberId.map(_.threadName)
-    _         <- ZIO.logDebug(s"Error catcher started on $fn")
     /**
      * await is similar to join, but they react differently to errors and interruption: await always
      * succeeds with Exit information, even if the fiber fails or is interrupted. In contrast to

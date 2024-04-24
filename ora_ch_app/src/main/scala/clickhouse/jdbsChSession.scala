@@ -394,6 +394,7 @@ case class chSess(sess: Connection, taskId: Int) {
                 |select ${meta.copyChOraColumns}
                 |from   ${meta.chSchema}.${meta.chTable}
                 |""".stripMargin
+                println(copyJdbcScript)
                 sess.createStatement.executeQuery(copyJdbcScript)
               }.refineToOrDie[SQLException]
     finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
