@@ -212,93 +212,10 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                    )
                    rsVq.close()
                    rsParams.close()
-
-                   // sess.close()
                    vqm
                  }.tapError(er => ZIO.logError(er.getMessage))
                    .refineToOrDie[SQLException]
   } yield queryMeta
-
-  private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
-    _ <- ZIO.foreachDiscard(1 to rs.getMetaData.getColumnCount) { i =>
-           ZIO.logTrace(s"""${rs.getMetaData.getColumnName(i).toLowerCase} -
-                           |${rs.getMetaData.getColumnTypeName(i)} -
-                           |${rs.getMetaData.getColumnClassName(i)} -
-                           |${rs.getMetaData.getColumnDisplaySize(i)} -
-                           |${rs.getMetaData.getPrecision(i)} -
-                           |${rs.getMetaData.getScale(i)}
-                           |""".stripMargin)
-         }
-  } yield ()
-
-  /*  def getColumnsFromRs(rs: ResultSet): ZIO[Any, SQLException, List[OraChColumn]] = for {
-    _    <- debugRsColumns(rs)
-    cols <- ZIO.attemptBlockingInterrupt {
-              (1 to rs.getMetaData.getColumnCount)
-                .map(i =>
-                  OraChColumn(
-                    rs.getMetaData.getColumnName(i).toLowerCase,
-                    rs.getMetaData.getColumnTypeName(i),
-                    rs.getMetaData.getColumnClassName(i),
-                    rs.getMetaData.getColumnDisplaySize(i),
-                    rs.getMetaData.getPrecision(i),
-                    rs.getMetaData.getScale(i),
-                    rs.getMetaData.isNullable(i),
-                    " "
-                  )
-                )
-                .toList
-            }.tapError(er => ZIO.logError(er.getMessage))
-              .refineToOrDie[SQLException]
-  } yield cols*/
-
-  /*  def insertRsDataInTable(
-    rs: ResultSet,
-    tableName: String,
-    oraSchema: String
-  ): ZIO[Any, SQLException, Unit] = for {
-    cols <- getColumnsFromRs(rs).tapError(er => ZIO.logError(er.getMessage))
-    _    <- ZIO.attemptBlockingInterrupt {
-              val batch_size       = 1000
-              val fetch_size       = 1000
-              val nakedCols        = cols.map(chCol => chCol.name).mkString(",")
-              val bindQuests       = cols.map(_ => "?").mkString(",")
-              val insQuery: String =
-                s"insert into $oraSchema.$tableName($nakedCols) values($bindQuests)"
-              // println(s" insQuery = $insQuery")
-
-              val ps: PreparedStatement = sess.prepareStatement(insQuery)
-              rs.setFetchSize(fetch_size)
-
-              Iterator.continually(rs).takeWhile(_.next()).foldLeft(1) { case (counter, rs) =>
-                cols.foldLeft(1) { case (i, c) =>
-                  (c.typeName, c.typeClass, c.precision) match {
-                    case (
-                          "UInt8" | "UInt16" | "Int32" |
-                          "Nullable(Int32)" | "UInt32" | "Int64" | "UInt64",
-                          _,
-                          _
-                        ) =>
-                      ps.setLong(i, rs.getLong(c.name))
-                    case (_, "java.math.BigDecimal", _) => ps.setDouble(i, rs.getDouble(c.name))
-                    case (_, "java.lang.String", _)     => ps.setString(i, rs.getString(c.name))
-                  }
-                  i + 1
-                }
-                ps.addBatch()
-                if (counter == batch_size) {
-                  ps.executeBatch()
-                  0
-                } else
-                  counter + 1
-              }
-              ps.executeBatch()
-              sess.commit()
-              rs.close()
-              // sess.close()
-            }.tapError(er => ZIO.logError(er.getMessage))
-              .refineToOrDie[SQLException]
-  } yield ()*/
 
 }
 
@@ -721,8 +638,6 @@ trait jdbcSession {
 
 case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) extends jdbcSession {
 
-  println(s" jdbcSessionImpl main constructor sessType = $sessType")
-
   def sessTask(taskIdOpt: Option[Int] = Option.empty): ZIO[Any, SQLException, oraSessTask] = for {
     _       <- ZIO.logInfo(
                  s"[sessTask] jdbcSessionImpl.sess [${taskIdOpt.getOrElse(0)}] call oraConnectionTask"
@@ -739,7 +654,7 @@ case class jdbcSessionImpl(oraRef: OraConnRepoImpl, sessType: SessTypeEnum) exte
   } yield s
 
   def sessCalc(vqId: Int, debugMsg: String): ZIO[Any, SQLException, oraSessCalc] = for {
-    _       <- ZIO.logInfo(s"[sessCalc] jdbcSessionImpl.sess [$debugMsg] call oraConnectionCalc")
+    _       <- ZIO.logDebug(s"[sessCalc] jdbcSessionImpl.sess [$debugMsg] call oraConnectionCalc")
     session <- oraConnectionCalc(vqId)
   } yield session
 

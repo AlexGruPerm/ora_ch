@@ -643,7 +643,7 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
   override def getClickHousePool(): ZIO[Any, SQLException, ClickHouseDataSource] = for {
     start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
     _      <-
-      ZIO.logInfo(
+      ZIO.logDebug(
         s"chConnection at this time internally new Clickhouse connection pool created............ "
       )
     sess   <- ZIO.attemptBlockingInterrupt {
@@ -666,7 +666,7 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
               }.refineToOrDie[SQLException]
     finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
     _      <-
-      ZIO.logInfo(
+      ZIO.logDebug(
         s"chConnection ${finish - start} ms."
       )
   } yield sess
