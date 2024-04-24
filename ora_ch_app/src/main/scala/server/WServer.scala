@@ -169,7 +169,6 @@ object WServer {
       )
   } yield rowCount
 
-
   /**
    * Generally we update just subset of rows in table. In this case update done with DICTIONARY.
    *
@@ -411,7 +410,6 @@ object WServer {
           .when(currStatus.state != Wait)
     } yield ()
 
-
   /**
    * When task is started as startTask(newTask).provide(...).forkDaemon we want save error in oracle
    * db when fiber fail or die. This catcher take this error and save it into db.
@@ -480,7 +478,6 @@ object WServer {
                     } yield Response.json(s"""{"taskid": "$taskId"}""").status(Status.Ok)
                 }
   } yield response
-
 
   private def calc(
     req: Request

@@ -95,6 +95,9 @@ ThisBuild / scalaVersion := "2.13.10"
   )
 
   ora_ch_app / assembly / assemblyMergeStrategy := {
+    //case "log4j.properties" => MergeStrategy.last
+    //case "logback.xml" => MergeStrategy.last
+    //case "resources/logback.xml" => MergeStrategy.last
     case PathList("module-info.class") => MergeStrategy.discard
     case x if x.endsWith("/module-info.class") => MergeStrategy.discard
     case "reference.conf" => MergeStrategy.concat
