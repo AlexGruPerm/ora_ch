@@ -5,15 +5,25 @@ import server.WServer
 import task.ImplTaskRepo
 import zio.{ ZIO, _ }
 import zio.http._
-import common.{ SessCalc, SessTask }
 
 object MainApp extends ZIOAppDefault {
 
-  /**
-   * Wait app(12) 12 seconds while register id (Task or Calc) in Oracle db.
-   */
-  def app: ZIO[Any, Throwable, Nothing] = ZIO
-    .withLogger(ZLogger.default.map(println(_)).filterLogLevel(_ >= LogLevel.Debug)) {
+    val logger: ZLogger[String, Unit] =
+    new ZLogger[String, Unit] {
+      override def apply(
+                          trace: Trace,
+                          fiberId: FiberId,
+                          logLevel: LogLevel,
+                          message: () => String,
+                          cause: Cause[Any],
+                          context: FiberRefs,
+                          spans: List[LogSpan],
+                          annotations: Map[String, String]
+                        ): Unit =
+        println(s"${java.time.Instant.now()} - ${logLevel.label} - ${message()}")
+    }
+
+    def app: ZIO[Any, Throwable, Nothing] = ZIO.withLogger(logger.filterLogLevel(_ >= LogLevel.Info)) {
       (Server.install(WServer.app(60)).flatMap { port =>
         ZIO.logInfo(s"Started server on port: $port")
       } *> ZIO.never)
