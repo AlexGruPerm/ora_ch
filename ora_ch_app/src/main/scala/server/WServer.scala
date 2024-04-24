@@ -28,8 +28,7 @@ object WServer {
     table: Table,
     oraSession: oraSessTask,
     chSession: chSess,
-    maxValCnt: Option[MaxValAndCnt] // ,
-    // begin: Long
+    maxValCnt: Option[MaxValAndCnt]
   ): ZIO[Any, Exception, Long] = for {
     // start      <- Clock.currentTime(TimeUnit.MILLISECONDS)
     copiedRows <- chSession.getCountCopiedRows(table)
@@ -100,7 +99,6 @@ object WServer {
             )
     } yield ()
 
-  // @nowarn
   private def copyTableEffect(
     chUpdateSession: chSess,
     taskId: Int,
@@ -171,45 +169,6 @@ object WServer {
       )
   } yield rowCount
 
-  /**
-   * This version update column(s) with using
-   *
-   * CREATE TABLE UPD_TABLE ( ) ENGINE = JOIN(ANY, LEFT, PRIMARYKEYCOLUMNSCH) SETTINGS
-   * JOIN_USE_NULLS = 1
-   *
-   * ALTER TABLE TARGET_TABLE_FOR_UPDATE UPDATE .. = JOINGET(UPD_TABLE... WHERE 1>0;
-   *
-   * ***** Use it ONLY when whole table updated (all rows) ***** Otherwise: For example with
-   * ("where_filter":" 1>2 ") all updated fields will be updated to NULL.
-   *
-   * If only part of rows updated then use updateWithTableDict
-   */
-  /*  private def updateTableColumns(
-    sessForUpd: oraSessTask,
-    sess: oraSessTask,
-    sessCh: chSess,
-    table: Table,
-    fetch_size: Int,
-    batch_size: Int
-  ): ZIO[ImplTaskRepo, Throwable, Long] = for {
-    _                   <- sess.setTableBeginCopy(table)
-    leftJoinUpdateTable  = s"upd_${table.name}"
-    primaryKeyColumnsCh <- sessCh.getPkColumns(table)
-    _                   <-
-      updatedCopiedRowsCountFUpd(table, table.copy(name = leftJoinUpdateTable), sessForUpd, sessCh)
-        .delay(2.second)
-        .repeat(Schedule.spaced(5.second))
-        .fork
-    rowCount            <- sessCh.recreateTmpTableForUpdate(
-                             table,
-                             sess.getDataResultSetForUpdate(table, fetch_size, primaryKeyColumnsCh),
-                             batch_size,
-                             primaryKeyColumnsCh,
-                             LeftJoin
-                           )
-    _                   <- sess.setTableCopied(table, rowCount)
-    _                   <- sessCh.updateLeftJoin(table, table.copy(name = leftJoinUpdateTable), primaryKeyColumnsCh)
-  } yield rowCount*/
 
   /**
    * Generally we update just subset of rows in table. In this case update done with DICTIONARY.
@@ -452,19 +411,6 @@ object WServer {
           .when(currStatus.state != Wait)
     } yield ()
 
-  private def currStatusCheckerCalc(): ZIO[ImplCalcRepo, Throwable, Unit] =
-    for {
-      repo       <- ZIO.service[ImplCalcRepo]
-      currStatus <- repo.getState
-      _          <- ZIO.logInfo(s"Repo currStatus = ${currStatus.state}")
-      _          <- ZIO
-                      .fail(
-                        new Exception(
-                          s" already running, look at tables: ora_to_ch_query_log"
-                        )
-                      )
-                      .when(currStatus.state != Wait)
-    } yield ()
 
   /**
    * When task is started as startTask(newTask).provide(...).forkDaemon we want save error in oracle
@@ -535,107 +481,6 @@ object WServer {
                 }
   } yield response
 
-  private def listToQueue[A](l: List[A]): mutable.Queue[A] = new mutable.Queue[A] ++= l
-
-  private def mapOfQueues(queries: List[Query]): Map[Int, mutable.Queue[Query]] =
-    queries.groupBy(_.query_id).map { case (k: Int, lst: List[Query]) =>
-      (k, listToQueue(lst))
-    }
-
-  def listOfListsQuery(
-    m: Map[Int, mutable.Queue[Query]],
-    acc: List[List[Query]] = List.empty[List[Query]]
-  ): List[List[Query]] =
-    if (m.exists(_._2.nonEmpty)) {
-      if (m.count(_._2.nonEmpty) == 1) {
-        val nonemptyQueue = m.find(_._2.nonEmpty)
-        nonemptyQueue match {
-          case Some((key, queue)) =>
-            val element: Query = queue.dequeue()
-            listOfListsQuery(Map(key -> queue), acc :+ List(element))
-          case None               => acc
-        }
-      } else {
-        val keys: List[Int]          = m.filter(_._2.nonEmpty).keys.toList
-        val k1: Int                  = keys.head
-        val k2: Int                  = keys.tail.head
-        val q1: mutable.Queue[Query] = m.getOrElse(k1, mutable.Queue.empty[Query])
-        val q2: mutable.Queue[Query] = m.getOrElse(k2, mutable.Queue.empty[Query])
-        val query1                   = q1.dequeue()
-        val query2                   = q2.dequeue()
-        listOfListsQuery(m.updated(k1, q1).updated(k2, q2), acc :+ List(query1, query2))
-      }
-    } else
-      acc
-
-  private def getCalcAndCopyEffect(
-    oraSess: jdbcSession,
-    q: Query,
-    idReloadCalcId: Int
-  ): ZIO[ImplCalcRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
-    s          <- oraSess.sessCalc(debugMsg = "calc - copyDataChOra")
-    meta       <- CalcLogic.getCalcMeta(q, s)
-    queryLogId <- CalcLogic.startCalculation(q, meta, s, idReloadCalcId)
-    eff        <- CalcLogic.copyDataChOra(q, meta, s, queryLogId)
-  } yield eff
-
-  private def executeCalcAndCopy(
-    reqCalc: ReqCalcSrc
-  ): ZIO[ImplCalcRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
-    _         <-
-      ZIO.logInfo(s"executeCalcAndCopy for reqCalc = ${reqCalc.queries.map(_.query_id).toString()}")
-    oraSess   <- ZIO.service[jdbcSession]
-    queries   <- ZIO.succeed(reqCalc.queries)
-    repo      <- ZIO.service[ImplCalcRepo]
-    repoState <- repo.getState
-    _         <- ZIO.logInfo(s"repo state = $repoState")
-
-    /**
-     * TODO: old algo of simple seq executions. calcsEffects = queries.map(query =>
-     * oraSess.sessCalc(debugMsg = "calc - copyDataChOra").flatMap { s =>
-     * CalcLogic.getCalcMeta(query, s).flatMap { meta => CalcLogic.startCalculation(query, meta, s,
-     * reqCalc.id_reload_calc).flatMap { queryLogId => CalcLogic.copyDataChOra(query, meta, s,
-     * queryLogId) } } } ) _ <- ZIO.collectAll(calcsEffects)
-     */
-
-    calcsEffects =
-      listOfListsQuery(mapOfQueues(queries)).map(query =>
-        query.map(q => (q.query_id, getCalcAndCopyEffect(oraSess, q, reqCalc.id_reload_calc)))
-      )
-
-    _ <- ZIO.foreachDiscard(calcsEffects) { lst =>
-           ZIO.logInfo(s"parallel execution of ${lst.map(_._1)} ") *>
-             ZIO
-               .collectAllPar(lst.map(_._2))
-               .withParallelism(2 /*SEQ-PAR*/ )
-               .tapError(_ => repo.clearCalc)
-         }
-
-    _ <- repo.clearCalc
-  } yield ()
-
-  private def calcAndCopy(
-    reqCalc: ReqCalcSrc // ,
-    // waitSeconds: Int
-  ): ZIO[ImplCalcRepo with SessTypeEnum, Throwable, Response] = for {
-    repo <- ZIO.service[ImplCalcRepo]
-    _    <- currStatusCheckerCalc()
-    _    <- repo.create(ReqCalc(id = reqCalc.id_reload_calc))
-    _    <- repo.setState(CalcState(Executing))
-    /**
-     * We can use parallel execution only with degree =2. Because listOfListsQuery(mapOfQueues
-     * algorithm make List of lists Query, List.size=2 Parallel(degree = 2)
-     */
-    _    <- executeCalcAndCopy(reqCalc)
-              .provide(
-                OraConnRepoImpl.layer(reqCalc.servers.oracle, 2),
-                ZLayer.succeed(repo),
-                ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
-                ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,
-                ZLayer.succeed(SessCalc)
-              )
-              .forkDaemon
-  } yield Response.json(s"""{"calcId":"ok"}""").status(Status.Ok)
 
   private def calc(
     req: Request
@@ -644,7 +489,7 @@ object WServer {
     _        <- ZIO.logDebug(s"JSON = $reqCalcE")
     resp     <- reqCalcE match {
                   case Left(exp_str) => ZioResponseMsgBadRequest(exp_str)
-                  case Right(src)    => calcAndCopy(src)
+                  case Right(src)    => CalcLogic.calcAndCopy(src)
                 }
   } yield resp
 
