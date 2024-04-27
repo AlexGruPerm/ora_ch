@@ -394,7 +394,7 @@ case class chSess(sess: Connection, taskId: Int) {
                 |select ${meta.copyChOraColumns}
                 |from   ${meta.chSchema}.${meta.chTable}
                 |""".stripMargin
-                println(copyJdbcScript)
+                //println(copyJdbcScript)
                 sess.createStatement.executeQuery(copyJdbcScript)
               }.refineToOrDie[SQLException]
     finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
@@ -618,8 +618,8 @@ case class chSess(sess: Connection, taskId: Int) {
                  case "UInt32"        => r.replace(c.name, mapCalcParams.getOrElse(c.name, "*****"))
                }
              }
-           val insQuery: String                   = s"insert into ${meta.chSchema}.${meta.chTable} $selectQuery"
-           val rs: ResultSet                      = sess.createStatement.executeQuery(insQuery)
+           val insQuery: String = s"insert into ${meta.chSchema}.${meta.chTable} $selectQuery"
+           val rs: ResultSet    = sess.createStatement.executeQuery(insQuery)
            rs.close()
            insQuery
          }.tapError(er => ZIO.logError(er.getMessage)
@@ -630,7 +630,6 @@ case class chSess(sess: Connection, taskId: Int) {
 }
 
 trait jdbcChSession {
-  // def sess(taskId: Int): ZIO[Any, SQLException, chSess]
   val props = new Properties()
   def getClickHousePool(): ZIO[Any, SQLException, ClickHouseDataSource]
 }

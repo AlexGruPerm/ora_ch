@@ -25,7 +25,7 @@ object CalcLogic {
     ora: oraSessCalc,
     queryLogId: Int
   ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
-    _          <- ZIO.logInfo(s"startCalculation SID = $ora.getPid ch_table = ${meta.chTable}")
+    _          <- ZIO.logInfo(s"Start Calculation QL.ID:$queryLogId SID:${ora.getPid} [${meta.chTable}]")
     repo       <- ZIO.service[ImplCalcRepo]
     clickhouse <- ZIO.service[jdbcChSession]
     chPool     <- clickhouse.getClickHousePool()

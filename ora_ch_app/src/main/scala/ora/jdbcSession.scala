@@ -37,22 +37,7 @@ sealed trait oraSess {
 
 case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
 
-  def getOraSessionId(): ZIO[Any, SQLException, Int] = for {
-    sid <- ZIO.attemptBlockingInterrupt {
-             val stmt: Statement = sess.createStatement
-             val rs: ResultSet   =
-               stmt.executeQuery("select sys_context('USERENV','SID') as sid from dual")
-             rs.next()
-             val sessionId: Int  = rs.getInt("sid")
-             rs.close()
-             sess.close()
-             sessionId
-           }.refineToOrDie[SQLException]
-  } yield sid
-
-  /**/
   def insertViewQueryLog(q: Query, id_reload_calc: Int): ZIO[Any, SQLException, Int] = for {
-    _  <- ZIO.logInfo(s" insertViewQueryLog for idVq = ${q.query_id}")
     id <- ZIO.attemptBlockingInterrupt {
             val query: String        =
               s""" insert into ora_to_ch_query_log(id,id_vq,ora_sid,begin_calc,state,
@@ -74,15 +59,13 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
             sess.setClientInfo("OCSID.ACTION", s"calc_$id")
             sess.commit()
             insertVqLog.close()
-            // sess.close()//todo: remove todo 0
             id
           }.tapError(er => ZIO.logError(er.getMessage))
             .refineToOrDie[SQLException]
-    _  <- ZIO.logInfo(s"AFTER insertViewQueryLog id=$id")
+    _  <- ZIO.logInfo(s"INSERTED LOG ora_to_ch_query_log QUERY [${q.query_id}] -> ID = $id")
   } yield id
 
   def saveEndCalculation(id: Int): ZIO[Any, SQLException, Unit] = for {
-    _ <- ZIO.logInfo(s"ORA saveEndCalculation for calcId = $calcId id=$id")
     _ <- ZIO.attemptBlockingInterrupt {
            val query: String =
              s""" update ora_to_ch_query_log l
@@ -94,7 +77,6 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            rs.next()
            sess.commit()
            rs.close()
-           // sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
@@ -127,7 +109,6 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val rs: ResultSet = sess.createStatement.executeQuery(query)
            sess.commit()
            rs.close()
-           // sess.close()//todo: remove todo #2
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
   } yield ()
