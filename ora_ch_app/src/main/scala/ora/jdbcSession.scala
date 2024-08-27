@@ -600,7 +600,8 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
               t.sync_by_columns,
               t.sync_update_by_column_max,
               t.clr_ora_table_aft_upd,
-              t.order_by_ora_data
+              t.order_by_ora_data,
+              t.src_table_full_name
             )
           )
         }

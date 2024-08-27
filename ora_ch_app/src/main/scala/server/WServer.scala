@@ -145,10 +145,10 @@ object WServer {
 
   private val routes: Int => Routes[ImplTaskRepo with ImplCalcRepo, Nothing] = waitSeconds =>
     Routes(
-      Method.POST / "task"  -> handler { (req: Request) =>
+      Method.POST / "task" -> handler { (req: Request) =>
         catchCover(task(req, waitSeconds).provideSome[ImplTaskRepo](ZLayer.succeed(SessTask)))
       },
-      Method.POST / "calc"  -> handler { (req: Request) =>
+      Method.POST / "calc" -> handler { (req: Request) =>
         catchCover(calc(req).provideSome[ImplCalcRepo](ZLayer.succeed(SessCalc)))
       }
     )

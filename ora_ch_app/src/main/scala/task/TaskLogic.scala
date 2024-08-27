@@ -1,12 +1,12 @@
 package task
 
-import clickhouse.{chSess, jdbcChSession}
+import clickhouse.{ chSess, jdbcChSession }
 import common.Types.MaxValAndCnt
-import common.{Executing, Ready, TaskState, Wait}
-import ora.{jdbcSession, oraSessTask}
-import request.{AppendByMax, AppendNotIn, AppendWhere, Recreate, ReqNewTask, Update}
+import common.{ Executing, Ready, TaskState, Wait }
+import ora.{ jdbcSession, oraSessTask }
+import request.{ AppendByMax, AppendNotIn, AppendWhere, Recreate, ReqNewTask, Update }
 import table.Table
-import zio.{Clock, FiberId, Schedule, ZIO, durationInt}
+import zio.{ durationInt, Clock, FiberId, Schedule, ZIO }
 import java.sql.SQLException
 import java.util.concurrent.TimeUnit
 import scala.annotation.nowarn
@@ -15,12 +15,12 @@ object TaskLogic {
 
   private def closeSession(s: oraSessTask, table: Table): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
-        s.sess.commit()
-        s.sess.close()
-      }.refineToOrDie[SQLException]
-      .tapError(er =>
-        ZIO.logError(s"closeSession [${table.fullTableName()}] error: ${er.getMessage}")
-      )
+           s.sess.commit()
+           s.sess.close()
+         }.refineToOrDie[SQLException]
+           .tapError(er =>
+             ZIO.logError(s"closeSession [${table.fullTableName()}] error: ${er.getMessage}")
+           )
   } yield ()
 
   /**
@@ -33,14 +33,14 @@ object TaskLogic {
    * dictHas('schema.dict_xxx', (pk_columns_in_ch));
    */
   private def updateWithTableDict(
-                                   chUpdateSession: chSess,
-                                   @nowarn taskId: Int,
-                                   oraSession: oraSessTask,
-                                   chLoadSession: chSess,
-                                   table: Table,
-                                   fetch_size: Int,
-                                   batch_size: Int
-                                 ): ZIO[ImplTaskRepo, Throwable, Long] = for {
+    chUpdateSession: chSess,
+    @nowarn taskId: Int,
+    oraSession: oraSessTask,
+    chLoadSession: chSess,
+    table: Table,
+    fetch_size: Int,
+    batch_size: Int
+  ): ZIO[ImplTaskRepo, Throwable, Long] = for {
     _                   <- oraSession.setTableBeginCopy(table)
     updateMergeTreeTable = s"upd_${table.name}"
     updateDictName       = s"dict_${table.name}"
@@ -49,32 +49,32 @@ object TaskLogic {
 
     primaryKeyColumnsCh <- chUpdateSession.getPkColumns(table)
     fiberUpdCnt          = updatedCopiedRowsCountFUpd(
-      table,
-      table.copy(name = updateMergeTreeTable),
-      oraSession,
-      chUpdateSession
-    ).delay(5.second)
-      .repeat(Schedule.spaced(5.second))
-      .onInterrupt(
-        debugInterruption("updatedCopiedRowsCountFUpd")
-      )
+                             table,
+                             table.copy(name = updateMergeTreeTable),
+                             oraSession,
+                             chUpdateSession
+                           ).delay(5.second)
+                             .repeat(Schedule.spaced(5.second))
+                             .onInterrupt(
+                               debugInterruption("updatedCopiedRowsCountFUpd")
+                             )
     loadUpdDataEff       = chLoadSession
-      .prepareStructsForUpdate(
-        updateStructsScripts,
-        table,
-        batch_size,
-        fetch_size,
-        primaryKeyColumnsCh
-      )
-      .tapError { er =>
-        ZIO.logError(s"prepareStructsForUpdate error - ${er.getMessage}") *>
-          saveError(
-            oraSession,
-            s"prepareStructsForUpdate error - ${er.getMessage}",
-            table
-          )
-      }
-      .refineToOrDie[SQLException]
+                             .prepareStructsForUpdate(
+                               updateStructsScripts,
+                               table,
+                               batch_size,
+                               fetch_size,
+                               primaryKeyColumnsCh
+                             )
+                             .tapError { er =>
+                               ZIO.logError(s"prepareStructsForUpdate error - ${er.getMessage}") *>
+                                 saveError(
+                                   oraSession,
+                                   s"prepareStructsForUpdate error - ${er.getMessage}",
+                                   table
+                                 )
+                             }
+                             .refineToOrDie[SQLException]
 
     rowCount <- fiberUpdCnt.disconnect race loadUpdDataEff
 
@@ -82,8 +82,8 @@ object TaskLogic {
     _ <- chLoadSession.updateMergeTree(table, primaryKeyColumnsCh)
 
     _ <- oraSession
-      .clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
-      .when(table.clr_ora_table_aft_upd.nonEmpty && rowCount > 0L)
+           .clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
+           .when(table.clr_ora_table_aft_upd.nonEmpty && rowCount > 0L)
 
   } yield rowCount
 
@@ -98,21 +98,20 @@ object TaskLogic {
   } yield rowCount
 
   private def updatedCopiedRowsCount(
-                                      table: Table,
-                                      oraSession: oraSessTask,
-                                      chSession: chSess,
-                                      maxValCnt: Option[MaxValAndCnt]
-                                    ): ZIO[Any, Exception, Long] = for {
+    table: Table,
+    oraSession: oraSessTask,
+    chSession: chSess,
+    maxValCnt: Option[MaxValAndCnt]
+  ): ZIO[Any, Exception, Long] = for {
     // start      <- Clock.currentTime(TimeUnit.MILLISECONDS)
     copiedRows <- chSession.getCountCopiedRows(table)
     rowCount   <- oraSession.updateCountCopiedRows(
-      table,
-      copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L),
-      "COPY"
-    )
+                    table,
+                    copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L),
+                    "COPY"
+                  )
     // finish     <- Clock.currentTime(TimeUnit.MILLISECONDS)
   } yield rowCount
-
 
   private def saveError(
     sess: oraSessTask,

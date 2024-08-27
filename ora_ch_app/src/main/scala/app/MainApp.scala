@@ -8,22 +8,23 @@ import zio.http._
 
 object MainApp extends ZIOAppDefault {
 
-    val logger: ZLogger[String, Unit] =
+  val logger: ZLogger[String, Unit] =
     new ZLogger[String, Unit] {
       override def apply(
-                          trace: Trace,
-                          fiberId: FiberId,
-                          logLevel: LogLevel,
-                          message: () => String,
-                          cause: Cause[Any],
-                          context: FiberRefs,
-                          spans: List[LogSpan],
-                          annotations: Map[String, String]
-                        ): Unit =
+        trace: Trace,
+        fiberId: FiberId,
+        logLevel: LogLevel,
+        message: () => String,
+        cause: Cause[Any],
+        context: FiberRefs,
+        spans: List[LogSpan],
+        annotations: Map[String, String]
+      ): Unit =
         println(s"${java.time.Instant.now()} - ${logLevel.label} - ${message()}")
     }
 
-    def app: ZIO[Any, Throwable, Nothing] = ZIO.withLogger(logger.filterLogLevel(_ >= LogLevel.Info)) {
+  def app: ZIO[Any, Throwable, Nothing] = ZIO
+    .withLogger(logger.filterLogLevel(_ >= LogLevel.Info)) {
       (Server.install(WServer.app(60)).flatMap { port =>
         ZIO.logInfo(s"Started server on port: $port")
       } *> ZIO.never)

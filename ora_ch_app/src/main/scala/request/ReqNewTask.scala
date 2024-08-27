@@ -20,7 +20,8 @@ case class OneTable(
   sync_by_columns: OptString = Option.empty[String],
   sync_update_by_column_max: OptString = Option.empty[String],
   clr_ora_table_aft_upd: OptString = Option.empty[String],
-  order_by_ora_data: OptString = Option.empty[String]
+  order_by_ora_data: OptString = Option.empty[String],
+  src_table_full_name: OptString = Option.empty[String]
 ) {
   // println(s"... DEBUG [OneTable] $operation where_filter.isEmpty=${where_filter.isEmpty}")
 

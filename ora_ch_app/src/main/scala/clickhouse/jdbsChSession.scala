@@ -226,6 +226,7 @@ case class chSess(sess: Connection, taskId: Int) {
   } yield ()*/
 
   def deleteRowsFromChTable(table: Table): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.logInfo(s"deleting rows from ${table.name} by ${table.where_filter}")
     _ <- ZIO.attemptBlockingInterrupt {
            sess
              .createStatement
@@ -281,6 +282,10 @@ case class chSess(sess: Connection, taskId: Int) {
         ZIO.logInfo(
           s"recreateTableCopyData CNT_ROWS before coping = ${maxValCnt.map(_.CntRows).getOrElse(0L)}"
         ) // todo: remove
+      _      <-
+        ZIO.logInfo(
+          s"COPY From:${table.src_table_full_name.getOrElse(table.fullTableName())} To:${table.fullTableName()}"
+        )
       _      <- recreate(table, createChTableScript).when(table.recreate == 1)
       rows   <- ZIO.attemptBlockingInterrupt {
                   val whereFilter: String           = table.whereFilter(maxValCnt, appendKeys)
@@ -290,7 +295,7 @@ case class chSess(sess: Connection, taskId: Int) {
                      |select ${table.only_columns.getOrElse("*").toUpperCase()}
                      |from jdbc('ora?fetch_size=$fetch_size&batch_size=$batch_size',
                      |          'select ${table.only_columns.getOrElse("*").toUpperCase()}
-                     |             from ${table.fullTableName()}
+                     |             from ${table.src_table_full_name.getOrElse(table.fullTableName())}
                      |             $whereFilter
                      |             ${table.orderBy()}'
                      |         )
@@ -394,7 +399,7 @@ case class chSess(sess: Connection, taskId: Int) {
                 |select ${meta.copyChOraColumns}
                 |from   ${meta.chSchema}.${meta.chTable}
                 |""".stripMargin
-                //println(copyJdbcScript)
+                // println(copyJdbcScript)
                 sess.createStatement.executeQuery(copyJdbcScript)
               }.refineToOrDie[SQLException]
     finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
@@ -618,8 +623,8 @@ case class chSess(sess: Connection, taskId: Int) {
                  case "UInt32"        => r.replace(c.name, mapCalcParams.getOrElse(c.name, "*****"))
                }
              }
-           val insQuery: String = s"insert into ${meta.chSchema}.${meta.chTable} $selectQuery"
-           val rs: ResultSet    = sess.createStatement.executeQuery(insQuery)
+           val insQuery: String                   = s"insert into ${meta.chSchema}.${meta.chTable} $selectQuery"
+           val rs: ResultSet                      = sess.createStatement.executeQuery(insQuery)
            rs.close()
            insQuery
          }.tapError(er => ZIO.logError(er.getMessage)
