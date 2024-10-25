@@ -385,7 +385,9 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
                           ZIO.attemptBlockingInterrupt {
                             val query: String =
                               s"insert into ora_to_ch_tasks_tables(id,id_task,schema_name,table_name,operation,where_filter) " +
-                                s" values(s_ora_to_ch_tasks_tables.nextval, $taskId,'${t.schema}','${t.name}','${t.operation.operStr}','${t.where_filter.getOrElse(" ")}') "
+                                s" values(s_ora_to_ch_tasks_tables.nextval, $taskId,'${t.schema}','${t.name}','${t
+                                    .operation
+                                    .operStr}','${t.where_filter.getOrElse(" ")}') "
                             val rs: ResultSet = sess.createStatement.executeQuery(query)
                             sess.commit()
                             rs.close()

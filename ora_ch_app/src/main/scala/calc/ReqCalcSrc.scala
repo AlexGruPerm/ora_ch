@@ -7,7 +7,12 @@ import zio.json.{ DeriveJsonDecoder, DeriveJsonEncoder, JsonDecoder, JsonEncoder
 
 case class CalcParams(name: String, value: String)
 
-case class Query(query_id: Int, params: Set[CalcParams]) {
+/**
+ * order_by set order of calculation in List of queries.
+ * If exists != 0 order_by then calculation sequential
+ * If all queries have order_by=0 then we can calculate queries in parallel.
+*/
+case class Query(query_id: Int, order_by: Int, params: Set[CalcParams]) {
   def paramByName(pName: String): String =
     params.find(_.name == pName).getOrElse(CalcParams(pName, "*")).value.trim
 }

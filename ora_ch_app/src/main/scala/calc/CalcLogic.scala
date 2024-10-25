@@ -90,44 +90,38 @@ object CalcLogic {
     reqCalc: ReqCalcSrc
   ): ZIO[ImplCalcRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
     _           <-
-      ZIO.logInfo(s"executeCalcAndCopy for reqCalc = ${reqCalc.queries.map(_.query_id).toString()}")
+      ZIO.logInfo(
+        s"executeCalcAndCopy for reqCalc = ${reqCalc.queries.sortBy(_.order_by).map(_.query_id).toString()}"
+      )
     oraSess     <- ZIO.service[jdbcSession]
-    queries     <- ZIO.succeed(reqCalc.queries)
+    queries     <- ZIO.succeed(reqCalc.queries.sortBy(_.order_by))
     repo        <- ZIO.service[ImplCalcRepo]
     repoState   <- repo.getState
     _           <- ZIO.logInfo(s"repo state = $repoState")
     calcsEffects =
-      listOfListsQuery(mapOfQueues(queries)).map(query =>
-        query.map(q =>
-          (
-            q.query_id, // todo: rewrite in sep. func. with for-comprehension
-            oraSess.sessCalc(debugMsg = "calc - executeCalcAndCopy").flatMap { ora =>
-              ora
-                .insertViewQueryLog(q, reqCalc.id_reload_calc)
-                .flatMap(queryLogId =>
-                  getCalcAndCopyEffect(ora, q, queryLogId)
-                    .tapError(er =>
-                      ZIO.logError(s"getCalcAndCopyEffect error - ${er.getMessage}") *>
-                        ora.saveCalcError(queryLogId, er.getMessage) *>
-                        repo.clearCalc *>
-                        closeSession(ora)
-                    )
-                )
-            }
-          )
-        )
+      queries.map(q =>
+        oraSess
+          .sessCalc(debugMsg = s"calc [${q.query_id}] ord: [${q.order_by}] - executeCalcAndCopy")
+          .flatMap { ora =>
+            ora
+              .insertViewQueryLog(q, reqCalc.id_reload_calc)
+              .flatMap(queryLogId =>
+                getCalcAndCopyEffect(ora, q, queryLogId)
+                  .tapError(er =>
+                    ZIO.logError(s"getCalcAndCopyEffect error - ${er.getMessage}") *>
+                      ora.saveCalcError(queryLogId, er.getMessage) *>
+                      repo.clearCalc *>
+                      closeSession(ora)
+                  )
+              )
+          }
       )
-
-    _         <- ZIO.foreachDiscard(calcsEffects) { lst =>
-                   ZIO.logInfo(s"parallel execution of ${lst.map(_._1)} ") *>
-                     ZIO
-                       .foreachPar(lst)(_._2)
-                       .withParallelism(2)
-                       .tapError(_ => repo.clearCalc)
-                 }
-    _         <- repo.clearCalc
-    repoState <- repo.getState
-    _         <- ZIO.logInfo(s"Finish repo state = $repoState")
+    _           <- ZIO.foreachDiscard(calcsEffects) { r =>
+                     r.tapError(_ => repo.clearCalc)
+                   }
+    _           <- repo.clearCalc
+    repoState   <- repo.getState
+    _           <- ZIO.logInfo(s"Finish repo state = $repoState")
   } yield ()
 
   private def currStatusCheckerCalc(): ZIO[ImplCalcRepo, Throwable, Unit] =
@@ -156,7 +150,7 @@ object CalcLogic {
        */
       _    <- executeCalcAndCopy(reqCalc)
                 .provide(
-                  OraConnRepoImpl.layer(reqCalc.servers.oracle, 2),
+                  OraConnRepoImpl.layer(reqCalc.servers.oracle, 1),
                   ZLayer.succeed(repo),
                   ZLayer.succeed(reqCalc.servers.oracle) >>> jdbcSessionImpl.layer,
                   ZLayer.succeed(reqCalc.servers.clickhouse) >>> jdbcChSessionImpl.layer,

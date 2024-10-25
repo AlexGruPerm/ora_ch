@@ -614,9 +614,9 @@ case class chSess(sess: Connection, taskId: Int) {
            val mapCalcParams: Map[String, String] =
              calcParams.iterator.map(p => p.name -> p.value.trim).toMap
            val strQuery: String                   = meta.query.getOrElse(" ")
-            println("~Meta Params~~~~~~~~~~~~~~")
-            meta.params.toList.foreach(p => println(s"pram: ${p.name} [${p.ord}] - ${p.chType}"))
-            println("~~~~~~~~~~~~~~~")
+           println("~Meta Params~~~~~~~~~~~~~~")
+           meta.params.toList.foreach(p => println(s"pram: ${p.name} [${p.ord}] - ${p.chType}"))
+           println("~~~~~~~~~~~~~~~")
            val selectQuery: String                =
              meta.params.toList.sortBy(_.ord).foldLeft(strQuery) { case (r, c) =>
                c.chType match {
@@ -627,9 +627,11 @@ case class chSess(sess: Connection, taskId: Int) {
                }
              }
            val insQuery: String                   = s"insert into ${meta.chSchema}.${meta.chTable} $selectQuery"
-            println("~ insQuery ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-            println(insQuery)
-            println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+           println(
+             "~ insQuery ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+           )
+           println(insQuery)
+           println("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
            val rs: ResultSet                      = sess.createStatement.executeQuery(insQuery)
            rs.close()
            insQuery
