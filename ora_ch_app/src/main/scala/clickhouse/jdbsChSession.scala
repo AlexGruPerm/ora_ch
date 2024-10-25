@@ -390,6 +390,19 @@ case class chSess(sess: Connection, taskId: Int) {
       cntRows     <- populateUpdTable(updTableName, table, fetch_size, batch_size)
     } yield cntRows
 
+  def optimizeTable(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
+    start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <- ZIO.attemptBlockingInterrupt {
+      val optimizeTable: String =
+        s"""
+           |OPTIMIZE TABLE ${meta.chSchema}.${meta.chTable} FINAL
+           |""".stripMargin
+      sess.createStatement.executeQuery(optimizeTable)
+    }.refineToOrDie[SQLException]
+    finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <- ZIO.logInfo(s"optimize table (ch -> ora) executed with ${finish - start} ms.")
+  } yield ()
+
   def copyTableChOra(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
     start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
     _      <- ZIO.attemptBlockingInterrupt {

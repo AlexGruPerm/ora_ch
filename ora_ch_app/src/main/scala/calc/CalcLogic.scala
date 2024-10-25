@@ -53,6 +53,7 @@ object CalcLogic {
     repo       <- ZIO.service[ImplCalcRepo]
     _          <- ora.saveBeginCopying(queryLogId)
     _          <- ora.truncateTable(meta.oraSchema, meta.oraTable)
+    _          <- ch.optimizeTable(meta).when(meta.chTable == "ch_cache_for_calc_12904_11487")
     _          <- ch.copyTableChOra(meta)
                     .tapError(er =>
                       ZIO.logError(s"copyDataChOra - ${er.getMessage}") *>
