@@ -213,18 +213,6 @@ case class chSess(sess: Connection, taskId: Int) {
     // .refineToOrDie[SQLException] orElse ZIO.succeed(0L)
   } yield rows
 
-  /*  private def debugRsColumns(rs: ResultSet): ZIO[Any, Nothing, Unit] = for {
-    _ <- ZIO.foreachDiscard(1 to rs.getMetaData.getColumnCount) { i =>
-           ZIO.logTrace(s"""${rs.getMetaData.getColumnName(i).toLowerCase} -
-                           |${rs.getMetaData.getColumnTypeName(i)} -
-                           |${rs.getMetaData.getColumnClassName(i)} -
-                           |${rs.getMetaData.getColumnDisplaySize(i)} -
-                           |${rs.getMetaData.getPrecision(i)} -
-                           |${rs.getMetaData.getScale(i)}
-                           |""".stripMargin)
-         }
-  } yield ()*/
-
   def deleteRowsFromChTable(table: Table): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.logInfo(s"deleting rows from ${table.name} by ${table.where_filter}")
     _ <- ZIO.attemptBlockingInterrupt {
@@ -393,12 +381,12 @@ case class chSess(sess: Connection, taskId: Int) {
   def optimizeTable(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
     start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
     _      <- ZIO.attemptBlockingInterrupt {
-      val optimizeTable: String =
-        s"""
-           |OPTIMIZE TABLE ${meta.chSchema}.${meta.chTable} FINAL
-           |""".stripMargin
-      sess.createStatement.executeQuery(optimizeTable)
-    }.refineToOrDie[SQLException]
+                val optimizeTable: String =
+                  s"""
+                |OPTIMIZE TABLE ${meta.chSchema}.${meta.chTable} FINAL
+                |""".stripMargin
+                sess.createStatement.executeQuery(optimizeTable)
+              }.refineToOrDie[SQLException]
     finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
     _      <- ZIO.logInfo(s"optimize table (ch -> ora) executed with ${finish - start} ms.")
   } yield ()

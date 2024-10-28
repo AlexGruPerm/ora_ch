@@ -123,6 +123,8 @@ object CalcLogic {
     _           <- repo.clearCalc
     repoState   <- repo.getState
     _           <- ZIO.logInfo(s"Finish repo state = $repoState")
+    calcId <- repo.getCalcId
+    _           <- ZIO.logInfo(s"Current calcId = $calcId")
   } yield ()
 
   private def currStatusCheckerCalc(): ZIO[ImplCalcRepo, Throwable, Unit] =
@@ -145,10 +147,6 @@ object CalcLogic {
       _    <- currStatusCheckerCalc()
       _    <- repo.create(ReqCalc(id = reqCalc.id_reload_calc))
       _    <- repo.setState(CalcState(Executing))
-      /**
-       * We can use parallel execution only with degree =2. Because listOfListsQuery(mapOfQueues
-       * algorithm make List of lists Query, List.size=2 Parallel(degree = 2)
-       */
       _    <- executeCalcAndCopy(reqCalc)
                 .provide(
                   OraConnRepoImpl.layer(reqCalc.servers.oracle, 1),
