@@ -46,18 +46,19 @@ object CalcLogic {
     ora: oraSessCalc,
     queryLogId: Int
   ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
-    _          <- ZIO.logInfo(s"copyDataChOra SID = [${ora.getPid}] query_id = ${query.query_id} ")
+    fn         <- ZIO.fiberId.map(_.threadName)
+    _          <- ZIO.logInfo(s"fiber:$fn copyDataChOra SID = [${ora.getPid}] query_id = ${query.query_id} ")
     clickhouse <- ZIO.service[jdbcChSession]
     chPool     <- clickhouse.getClickHousePool()
     ch         <- ZIO.succeed(chSess(chPool.getConnection, 0))
     repo       <- ZIO.service[ImplCalcRepo]
     _          <- ora.saveBeginCopying(queryLogId)
     _          <- ora.truncateTable(meta.oraSchema, meta.oraTable)
-    //_          <- ch.optimizeTable(meta).when(meta.chTable == "ch_cache_for_calc_12904_11487")
+    // _          <- ch.optimizeTable(meta).when(meta.chTable == "ch_cache_for_calc_12904_11487")
     _          <- ch.copyTableChOra(meta)
                     .tapError(er =>
                       ZIO.logError(s"copyDataChOra - ${er.getMessage}") *>
-                        ora.saveCalcError(queryLogId, er.getMessage) *>
+                        ora.saveCalcError(queryLogId, er.getMessage) *> //todo: remove it, handled outside and save in ora log.
                         repo.clearCalc
                     )
     _          <- ora.saveEndCopying(queryLogId, meta)
@@ -77,6 +78,28 @@ object CalcLogic {
              .tapError(er => ZIO.logError(s"closeSession error: ${er.getMessage}"))
     } yield ()
 
+  private def copyLocalCache(
+    meta: ViewQueryMeta,
+    ora: oraSessCalc,
+    queryLogId: Int
+  ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
+    fn <- ZIO.fiberId.map(_.threadName)
+    _  <- ZIO.logInfo(
+        s"fiber:$fn copyLocalCache (${meta.chSchema}) from ${meta.chTable} to ${meta.chTable.replace("ch_", "")}"
+      )
+    clickhouse <- ZIO.service[jdbcChSession]
+    chPool     <- clickhouse.getClickHousePool() // todo: may be shorter .map(ds => chSess(ds.getConnection, 0))
+    ch         <- ZIO.succeed(chSess(chPool.getConnection, 0))
+
+    _  <- ora.saveBeginLocalCopying(queryLogId)
+    _  <- ZIO.logInfo(" >>>>>>>>>>>>>>>> LOCAL COPYING BEGIN <<<<<<<<<<<<<<<<")
+    // _ <- ZIO.fail(new RuntimeException("LOCAL COPYING Error")) todo: remove Это обрабатывает вызовом снаружи и пишется в ора лог.
+    _  <- ch.copyInLocalCache(meta)
+    _  <- ZIO.logInfo(" >>>>>>>>>>>>>>>> LOCAL COPYING BEGIN <<<<<<<<<<<<<<<<")
+    _  <- ora.saveEndLocalCopying(queryLogId)
+    _  <- ZIO.logInfo(s">>> DEBUG = ${ora.getPid} queryLogId = $queryLogId")
+  } yield ()
+
   private def getCalcAndCopyEffect(
     ora: oraSessCalc,
     q: Query,
@@ -84,8 +107,10 @@ object CalcLogic {
   ): ZIO[ImplCalcRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
     meta <- CalcLogic.getCalcMeta(q, ora)
     _    <- CalcLogic.startCalculation(q, meta, ora, queryLogId)
-    eff  <- CalcLogic.copyDataChOra(q, meta, ora, queryLogId)
-  } yield eff
+    // todo: try parallel execution of and copyDataChOra
+    _    <- CalcLogic.copyLocalCache(meta, ora, queryLogId).when(q.copy_to_local_cache == 1)
+    _    <- CalcLogic.copyDataChOra(q, meta, ora, queryLogId)
+  } yield ()
 
   private def executeCalcAndCopy(
     reqCalc: ReqCalcSrc
@@ -123,7 +148,7 @@ object CalcLogic {
     _           <- repo.clearCalc
     repoState   <- repo.getState
     _           <- ZIO.logInfo(s"Finish repo state = $repoState")
-    calcId <- repo.getCalcId
+    calcId      <- repo.getCalcId
     _           <- ZIO.logInfo(s"Current calcId = $calcId")
   } yield ()
 

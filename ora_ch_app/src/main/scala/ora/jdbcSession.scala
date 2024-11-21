@@ -113,6 +113,21 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            .refineToOrDie[SQLException]
   } yield ()
 
+  def saveBeginLocalCopying(id: Int): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt {
+        val query: String =
+          s""" update ora_to_ch_query_log l
+             |   set l.begin_local_copy = sysdate,
+             |       l.state    = 'local_copying'
+             | where l.id = $id
+             | """.stripMargin
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        sess.commit()
+        rs.close()
+      }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
+  } yield ()
+
   def truncateTable(oraSchema: String, oraTable: String): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
            val query: String =
@@ -147,6 +162,22 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            sess.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
+  } yield ()
+
+  def saveEndLocalCopying(id: Int): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt {
+        val query: String =
+          s""" update ora_to_ch_query_log l
+             |   set l.end_local_copy = sysdate,
+             |       l.state    = 'finished_local_copy'
+             | where l.id = $id
+             | """.stripMargin
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        sess.commit()
+        rs.close()
+        //sess.close()
+      }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
   } yield ()
 
   def getQueryMeta(queryId: Int): ZIO[Any, SQLException, ViewQueryMeta] = for {

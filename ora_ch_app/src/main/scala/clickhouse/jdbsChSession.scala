@@ -407,6 +407,66 @@ case class chSess(sess: Connection, taskId: Int) {
     _      <- ZIO.logInfo(s"copyTableChOra (ch -> ora) executed with ${finish - start} ms.")
   } yield ()
 
+  private def localCopyDeleteInCache(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt {
+           val delete: String =
+             s"""
+                |delete from ${meta.chSchema}.${meta.chTable.replace("ch_", "")}
+                |where (datecalc_cache,date_cache) in (
+                |           select distinct datecalc_cache,date_cache
+                |             from ${meta.chSchema}.${meta.chTable}
+                |    )
+                |""".stripMargin
+           sess.createStatement.executeQuery(delete)
+         }.refineToOrDie[SQLException]
+  } yield ()
+
+  private def localCopyGetColumns(meta: ViewQueryMeta): ZIO[Any, SQLException, String] = for {
+    columnsForCopying <- ZIO.attemptBlockingInterrupt {
+                           val selectColumns: String =
+                             s"""
+                                |SELECT name
+                                |FROM system.columns
+                                |WHERE table = '${meta.chTable}' and
+                                |      database = '${meta.chSchema}'
+                                |order by position
+                                |""".stripMargin
+                           val rsCols                = sess.createStatement.executeQuery(selectColumns)
+                           val columns: String       = Iterator
+                             .continually(rsCols)
+                             .takeWhile(_.next())
+                             .map(rs => rs.getString("name"))
+                             .mkString(",")
+                           rsCols.close()
+                           columns
+                         }.refineToOrDie[SQLException]
+  } yield columnsForCopying
+
+  private def localCopyInsert(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
+    columnsForCopying <- localCopyGetColumns(meta) // todo: move to
+    _                 <- ZIO.logInfo(s"Columns for copying: $columnsForCopying")
+    _                 <- ZIO.attemptBlockingInterrupt {
+                           val insert: String =
+                             s"""
+                |insert into ${meta.chSchema}.${meta.chTable.replace("ch_", "")}($columnsForCopying)
+                |select $columnsForCopying
+                |  from ${meta.chSchema}.${meta.chTable}
+                |""".stripMargin
+                           sess.createStatement.executeQuery(insert)
+                         }.refineToOrDie[SQLException]
+  } yield ()
+
+  def copyInLocalCache(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
+    start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <- localCopyDeleteInCache(meta)
+    _      <- localCopyInsert(meta)
+    finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <-
+      ZIO.logInfo(
+        s"copyInLocalCache (${meta.chTable} -> ${meta.chTable.replace("ch_", "")}) executed with ${finish - start} ms."
+      )
+  } yield ()
+
   /*  //todo: delete it
   def recreateTmpTableForUpdate(
     table: Table,
