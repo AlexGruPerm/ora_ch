@@ -162,20 +162,19 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            .refineToOrDie[SQLException]
   } yield ()
 
-
   def saveFinalFinished(logId: Int): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
-        val query: String =
-          s""" update ora_to_ch_query_log l
-             |   set l.end_local_copy = sysdate,
-             |       l.state    = 'finished'
-             | where l.id = $logId
-             | """.stripMargin
-        val rs: ResultSet = sess.createStatement.executeQuery(query)
-        sess.commit()
-        rs.close()
-      }.tapError(er => ZIO.logError(er.getMessage))
-      .refineToOrDie[SQLException]
+           val query: String =
+             s""" update ora_to_ch_query_log l
+                |   set l.end_local_copy = sysdate,
+                |       l.state    = 'finished'
+                | where l.id = $logId
+                | """.stripMargin
+           val rs: ResultSet = sess.createStatement.executeQuery(query)
+           sess.commit()
+           rs.close()
+         }.tapError(er => ZIO.logError(er.getMessage))
+           .refineToOrDie[SQLException]
   } yield ()
 
   def saveEndLocalCopying(logId: Int): ZIO[Any, SQLException, Unit] = for {

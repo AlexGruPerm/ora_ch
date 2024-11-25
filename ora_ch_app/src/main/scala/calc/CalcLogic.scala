@@ -82,9 +82,9 @@ object CalcLogic {
   } yield ()
 
   private def saveFinalFinished(
-                              ora: oraSessCalc,
-                              queryLogId: Int
-                            ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
+    ora: oraSessCalc,
+    queryLogId: Int
+  ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
     fn <- ZIO.fiberId.map(_.threadName)
     _  <- ZIO.logInfo(s"fiber:$fn saveFinalFinished for logId=$queryLogId")
     _  <- ora.saveFinalFinished(queryLogId)
@@ -101,7 +101,7 @@ object CalcLogic {
     oraCopy <- CalcLogic.copyDataChOra(q, meta, ora, queryLogId).fork
     _       <- locCopy.join
     _       <- oraCopy.join
-    _ <- CalcLogic.saveFinalFinished(ora, queryLogId)
+    _       <- CalcLogic.saveFinalFinished(ora, queryLogId)
   } yield ()
 
   private def executeCalcAndCopy(
