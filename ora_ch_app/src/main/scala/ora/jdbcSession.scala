@@ -144,7 +144,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            val query: String =
              s""" update ora_to_ch_query_log l
                 |   set l.end_copy = sysdate,
-                |       l.state    = 'finished',
+                |       l.state    = 'finished_chora_copy',
                 |       l.ora_ch_calc_dates_id =
                 |       (select cd.id
                 |          from ora_ch_calc_dates cd
@@ -160,6 +160,22 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            rs.close()
          }.tapError(er => ZIO.logError(er.getMessage))
            .refineToOrDie[SQLException]
+  } yield ()
+
+
+  def saveFinalFinished(logId: Int): ZIO[Any, SQLException, Unit] = for {
+    _ <- ZIO.attemptBlockingInterrupt {
+        val query: String =
+          s""" update ora_to_ch_query_log l
+             |   set l.end_local_copy = sysdate,
+             |       l.state    = 'finished'
+             | where l.id = $logId
+             | """.stripMargin
+        val rs: ResultSet = sess.createStatement.executeQuery(query)
+        sess.commit()
+        rs.close()
+      }.tapError(er => ZIO.logError(er.getMessage))
+      .refineToOrDie[SQLException]
   } yield ()
 
   def saveEndLocalCopying(logId: Int): ZIO[Any, SQLException, Unit] = for {
