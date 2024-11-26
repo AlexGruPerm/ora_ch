@@ -139,12 +139,13 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
            .refineToOrDie[SQLException]
   } yield ()
 
-  def saveEndCopying(logId: Int, meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
+  def saveEndCopying(logId: Int, meta: ViewQueryMeta, parDegree: Int): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
            val query: String =
              s""" update ora_to_ch_query_log l
                 |   set l.end_copy = sysdate,
                 |       l.state    = 'finished_chora_copy',
+                |       l.par_degree = $parDegree,
                 |       l.ora_ch_calc_dates_id =
                 |       (select cd.id
                 |          from ora_ch_calc_dates cd

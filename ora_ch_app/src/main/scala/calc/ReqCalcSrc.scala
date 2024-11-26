@@ -11,7 +11,12 @@ case class CalcParams(name: String, value: String)
  * order_by set order of calculation in List of queries. If exists != 0 order_by then calculation
  * sequential If all queries have order_by=0 then we can calculate queries in parallel.
  */
-case class Query(query_id: Int, order_by: Int, copy_to_local_cache: Int, params: Set[CalcParams]) {
+case class Query(query_id: Int,
+                 order_by: Int,
+                 copy_to_local_cache: Int,
+                 copy_by_parts_key: Option[String],
+                 copy_by_parts_cnt : Option[Int],
+                 params: Set[CalcParams]) {
   def paramByName(pName: String): String =
     params.find(_.name == pName).getOrElse(CalcParams(pName, "*")).value.trim
 }

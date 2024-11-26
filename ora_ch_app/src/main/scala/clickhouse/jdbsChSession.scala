@@ -1,18 +1,18 @@
 package clickhouse
 
-import calc.{ CalcParams, ViewQueryMeta }
+import calc.{CalcParams, ViewQueryMeta}
 import com.clickhouse.client.config.ClickHouseClientOption
 import com.clickhouse.client.http.config.HttpConnectionProvider
-import com.clickhouse.jdbc.{ ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver }
-import common.{ AppendRowsWQuery, SessTypeEnum, UpdateStructsScripts }
+import com.clickhouse.jdbc.{ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver}
+import common.{AppendRowsWQuery, SessTypeEnum, UpdateStructsScripts}
 import conf.ClickhouseServer
 import table._
-import zio.{ Clock, Schedule, ZIO, ZLayer }
+import zio.{Clock, Schedule, ZIO, ZLayer}
 
-import java.sql.{ Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Types }
-import java.time.{ LocalDateTime, ZoneOffset }
+import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Statement, Types}
+import java.time.{LocalDateTime, ZoneOffset}
 import java.time.format.DateTimeFormatter
-import java.util.{ Calendar, Properties }
+import java.util.{Calendar, Properties}
 import common.Types._
 import request.AppendWhere
 
@@ -407,6 +407,37 @@ case class chSess(sess: Connection, taskId: Int) {
     _      <- ZIO.logInfo(s"copyTableChOra (ch -> ora) executed with ${finish - start} ms.")
   } yield ()
 
+
+  def copyTableChOraParts(meta: ViewQueryMeta, part_field: String, total_parts: Int, part_num: Int):
+    ZIO[Any, SQLException, Unit] = for {
+    start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    fn <- ZIO.fiberId.map(_.threadName)
+    _ <- ZIO.logInfo(s"copyTableChOraParts fn=$fn part_num=$part_num")
+    _      <- ZIO.attemptBlockingInterrupt {
+      val copyJdbcScript: String =
+        s"""
+           |insert into ${meta.oraSchema}.${meta.oraTable}(${meta.copyChOraColumns})
+           |select ${meta.copyChOraColumns}
+           | from(
+           |		  SELECT
+           |		        ds.*,
+           |		        NTILE($total_parts) OVER (ORDER BY hash_value) AS group_number
+           |		   from(
+           |				SELECT
+           |					    s.*,
+           |					    cityHash64($part_field) AS hash_value
+           |				FROM ${meta.chSchema}.${meta.chTable} s
+           |			   ) ds
+           |	 ) p
+           |where group_number = $part_num
+           |""".stripMargin
+      sess.createStatement.executeQuery(copyJdbcScript)
+    }.refineToOrDie[SQLException]
+
+    finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    _      <- ZIO.logInfo(s"copyTableChOraParts fn=$fn part_num=$part_num executed with ${finish - start} ms.")
+  } yield ()
+
   private def localCopyDeleteInCache(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
     _ <- ZIO.attemptBlockingInterrupt {
            val delete: String =
@@ -697,7 +728,6 @@ case class chSess(sess: Connection, taskId: Int) {
            rs.close()
            insQuery
          }.tapError(er => ZIO.logError(s" Error in insertFromQuery - ${er.getMessage}")
-         // query => ZIO.logDebug(s"insertFromQuery query = $query")
          ).refineToOrDie[SQLException]
   } yield ()
 
@@ -709,9 +739,6 @@ trait jdbcChSession {
 }
 
 case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
-
-  /*  private val ds = {
-  }*/
 
   override def getClickHousePool(): ZIO[Any, SQLException, ClickHouseDataSource] = for {
     start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
@@ -743,34 +770,6 @@ case class jdbcSessionImpl(ch: ClickhouseServer) extends jdbcChSession {
         s"chConnection ${finish - start} ms."
       )
   } yield sess
-
-  // todo: was moved to class constructor. Purpose: we need has one pool
-  /*  override def chConnection(taskId: Int): ZIO[Any, SQLException, chSess] = for {
-    start <- Clock.currentTime(TimeUnit.MILLISECONDS)
-    _ <- ZIO.logInfo(s"chConnection at this time internally new Clickhouse connection pool created............ ")
-    sess <- ZIO.attemptBlockingInterrupt {
-      props.setProperty("http_connection_provider", "HTTP_URL_CONNECTION")
-      // property in ms.
-      props.setProperty("connection_timeout", "720000")
-      props.setProperty("socket_timeout", "720000")
-      props.setProperty("dataTransferTimeout", "720000")
-      props.setProperty("timeToLiveMillis", "720000")
-      props.setProperty("socket_keepalive", "true")
-      val dataSource                 = new ClickHouseDataSource(ch.getUrl(), props)
-      val conn: ClickHouseConnection = dataSource.getConnection(ch.user, ch.password)
-      chSess(conn, taskId)
-    }.refineToOrDie[SQLException]
-    finish  <- Clock.currentTime(TimeUnit.MILLISECONDS)
-    _              <-
-      ZIO.logInfo(
-        s"chConnection ${finish - start} ms."
-      )
-  } yield sess*/
-
-  /*  def sess(taskId: Int): ZIO[Any, SQLException, chSess] = for {
-    session <- chConnection(taskId)
-  } yield session*/
-
 }
 
 object jdbcChSessionImpl {
