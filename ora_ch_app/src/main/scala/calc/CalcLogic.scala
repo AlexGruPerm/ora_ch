@@ -1,12 +1,12 @@
 package calc
 
-import clickhouse.{chSess, jdbcChSession, jdbcChSessionImpl}
+import clickhouse.{ chSess, jdbcChSession, jdbcChSessionImpl }
 import common._
 import connrepo.OraConnRepoImpl
-import ora.{jdbcSession, jdbcSessionImpl, oraSessCalc}
+import ora.{ jdbcSession, jdbcSessionImpl, oraSessCalc }
 import zio.ZIO.ifZIO
-import zio.http.{Response, Status}
-import zio.{ZIO, ZLayer}
+import zio.http.{ Response, Status }
+import zio.{ ZIO, ZLayer }
 import zio._
 
 import java.sql.SQLException
@@ -41,20 +41,30 @@ object CalcLogic {
     ora: oraSessCalc,
     queryLogId: Int
   ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
-    fn <- ZIO.fiberId.map(_.threadName)
-    _  <- ZIO.logInfo(s"fiber:$fn copyDataChOra SID = [${ora.getPid}] query_id = ${query.query_id} copy_by_parts_key=${query.copy_by_parts_key}")
-    ch <- ZIO
-            .serviceWithZIO[jdbcChSession](_.getClickHousePool())
-            .map(ds => chSess(ds.getConnection, 0))
-    _  <- ora.saveBeginCopying(queryLogId)
-    _  <- ora.truncateTable(meta.oraSchema, meta.oraTable)
+    fn       <- ZIO.fiberId.map(_.threadName)
+    _        <-
+      ZIO.logInfo(
+        s"fiber:$fn copyDataChOra SID = [${ora.getPid}] query_id = ${query.query_id} copy_by_parts_key=${query.copy_by_parts_key}"
+      )
+    ch       <- ZIO
+                  .serviceWithZIO[jdbcChSession](_.getClickHousePool())
+                  .map(ds => chSess(ds.getConnection, 0))
+    _        <- ora.saveBeginCopying(queryLogId)
+    _        <- ora.truncateTable(meta.oraSchema, meta.oraTable)
     condition = ZIO.succeed(query.copy_by_parts_key.nonEmpty)
-    parCopy = ZIO.foreachParDiscard(1 to query.copy_by_parts_cnt.getOrElse(1))(partNum =>
-      ch.copyTableChOraParts(meta, query.copy_by_parts_key.getOrElse("non_field"), query.copy_by_parts_cnt.getOrElse(1), partNum)
-    ).when(query.copy_by_parts_key.nonEmpty)
-    _ <- ifZIO(condition)(parCopy, ch.copyTableChOra(meta))
-    _  <- ora.saveEndCopying(queryLogId, meta, query.copy_by_parts_cnt.getOrElse(1))
-    _  <-
+    parCopy   = ZIO
+                  .foreachParDiscard(1 to query.copy_by_parts_cnt.getOrElse(1))(partNum =>
+                    ch.copyTableChOraParts(
+                      meta,
+                      query.copy_by_parts_key.getOrElse("non_field"),
+                      query.copy_by_parts_cnt.getOrElse(1),
+                      partNum
+                    )
+                  )
+                  .when(query.copy_by_parts_key.nonEmpty)
+    _        <- ifZIO(condition)(parCopy, ch.copyTableChOra(meta))
+    _        <- ora.saveEndCopying(queryLogId, meta, query.copy_by_parts_cnt.getOrElse(1))
+    _        <-
       ZIO.logInfo(
         s"End copyDataChOra for query_id = ${query.query_id}"
       )

@@ -1,18 +1,26 @@
 package clickhouse
 
-import calc.{CalcParams, ViewQueryMeta}
+import calc.{ CalcParams, ViewQueryMeta }
 import com.clickhouse.client.config.ClickHouseClientOption
 import com.clickhouse.client.http.config.HttpConnectionProvider
-import com.clickhouse.jdbc.{ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver}
-import common.{AppendRowsWQuery, SessTypeEnum, UpdateStructsScripts}
+import com.clickhouse.jdbc.{ ClickHouseConnection, ClickHouseDataSource, ClickHouseDriver }
+import common.{ AppendRowsWQuery, SessTypeEnum, UpdateStructsScripts }
 import conf.ClickhouseServer
 import table._
-import zio.{Clock, Schedule, ZIO, ZLayer}
+import zio.{ Clock, Schedule, ZIO, ZLayer }
 
-import java.sql.{Connection, DriverManager, PreparedStatement, ResultSet, SQLException, Statement, Types}
-import java.time.{LocalDateTime, ZoneOffset}
+import java.sql.{
+  Connection,
+  DriverManager,
+  PreparedStatement,
+  ResultSet,
+  SQLException,
+  Statement,
+  Types
+}
+import java.time.{ LocalDateTime, ZoneOffset }
 import java.time.format.DateTimeFormatter
-import java.util.{Calendar, Properties}
+import java.util.{ Calendar, Properties }
 import common.Types._
 import request.AppendWhere
 
@@ -407,35 +415,40 @@ case class chSess(sess: Connection, taskId: Int) {
     _      <- ZIO.logInfo(s"copyTableChOra (ch -> ora) executed with ${finish - start} ms.")
   } yield ()
 
-
-  def copyTableChOraParts(meta: ViewQueryMeta, part_field: String, total_parts: Int, part_num: Int):
-    ZIO[Any, SQLException, Unit] = for {
-    start  <- Clock.currentTime(TimeUnit.MILLISECONDS)
-    fn <- ZIO.fiberId.map(_.threadName)
-    _ <- ZIO.logInfo(s"copyTableChOraParts fn=$fn part_num=$part_num")
-    _      <- ZIO.attemptBlockingInterrupt {
-      val copyJdbcScript: String =
-        s"""
-           |insert into ${meta.oraSchema}.${meta.oraTable}(${meta.copyChOraColumns})
-           |select ${meta.copyChOraColumns}
-           | from(
-           |		  SELECT
-           |		        ds.*,
-           |		        NTILE($total_parts) OVER (ORDER BY hash_value) AS group_number
-           |		   from(
-           |				SELECT
-           |					    s.*,
-           |					    cityHash64($part_field) AS hash_value
-           |				FROM ${meta.chSchema}.${meta.chTable} s
-           |			   ) ds
-           |	 ) p
-           |where group_number = $part_num
-           |""".stripMargin
-      sess.createStatement.executeQuery(copyJdbcScript)
-    }.refineToOrDie[SQLException]
+  def copyTableChOraParts(
+    meta: ViewQueryMeta,
+    part_field: String,
+    total_parts: Int,
+    part_num: Int
+  ): ZIO[Any, SQLException, Unit] = for {
+    start <- Clock.currentTime(TimeUnit.MILLISECONDS)
+    fn    <- ZIO.fiberId.map(_.threadName)
+    _     <- ZIO.logInfo(s"copyTableChOraParts fn=$fn part_num=$part_num")
+    _     <- ZIO.attemptBlockingInterrupt {
+               val copyJdbcScript: String =
+                 s"""
+                |insert into ${meta.oraSchema}.${meta.oraTable}(${meta.copyChOraColumns})
+                |select ${meta.copyChOraColumns}
+                | from(
+                |		  SELECT
+                |		        ds.*,
+                |		        NTILE($total_parts) OVER (ORDER BY hash_value) AS group_number
+                |		   from(
+                |				SELECT
+                |					    s.*,
+                |					    cityHash64($part_field) AS hash_value
+                |				FROM ${meta.chSchema}.${meta.chTable} s
+                |			   ) ds
+                |	 ) p
+                |where group_number = $part_num
+                |""".stripMargin
+               sess.createStatement.executeQuery(copyJdbcScript)
+             }.refineToOrDie[SQLException]
 
     finish <- Clock.currentTime(TimeUnit.MILLISECONDS)
-    _      <- ZIO.logInfo(s"copyTableChOraParts fn=$fn part_num=$part_num executed with ${finish - start} ms.")
+    _      <- ZIO.logInfo(
+                s"copyTableChOraParts fn=$fn part_num=$part_num executed with ${finish - start} ms."
+              )
   } yield ()
 
   private def localCopyDeleteInCache(meta: ViewQueryMeta): ZIO[Any, SQLException, Unit] = for {
@@ -727,8 +740,8 @@ case class chSess(sess: Connection, taskId: Int) {
            val rs: ResultSet                      = sess.createStatement.executeQuery(insQuery)
            rs.close()
            insQuery
-         }.tapError(er => ZIO.logError(s" Error in insertFromQuery - ${er.getMessage}")
-         ).refineToOrDie[SQLException]
+         }.tapError(er => ZIO.logError(s" Error in insertFromQuery - ${er.getMessage}"))
+           .refineToOrDie[SQLException]
   } yield ()
 
 }
