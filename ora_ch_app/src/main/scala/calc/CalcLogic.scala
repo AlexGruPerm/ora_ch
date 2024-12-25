@@ -88,9 +88,8 @@ object CalcLogic {
     queryLogId: Int
   ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
     fn <- ZIO.fiberId.map(_.threadName)
-    _  <- ZIO.logInfo(s"fiber:$fn copyLocalCache (${meta.chSchema})}")
-    ch <- ZIO
-            .serviceWithZIO[jdbcChSession](_.getClickHousePool())
+    _  <- ZIO.logInfo(s"fiber:$fn copyLocalCache (${meta.chSchema}) for queryLogId=$queryLogId")
+    ch <- ZIO.serviceWithZIO[jdbcChSession](_.getClickHousePool())
             .map(ds => chSess(ds.getConnection, 0))
     _  <- ora.saveBeginLocalCopying(queryLogId)
     _  <- ch.copyInLocalCache(meta)
@@ -113,6 +112,7 @@ object CalcLogic {
   ): ZIO[ImplCalcRepo with jdbcChSession with jdbcSession, Throwable, Unit] = for {
     meta    <- CalcLogic.getCalcMeta(q, ora)
     _       <- CalcLogic.startCalculation(q, meta, ora, queryLogId)
+    _       <- ZIO.logInfo(s" For ${q.query_id} copy_to_local_cache=${q.copy_to_local_cache}")
     locCopy <- CalcLogic.copyLocalCache(meta, ora, queryLogId).when(q.copy_to_local_cache == 1).fork
     oraCopy <- CalcLogic.copyDataChOra(q, meta, ora, queryLogId).fork
     _       <- locCopy.join

@@ -171,8 +171,7 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
     _ <- ZIO.attemptBlockingInterrupt {
            val query: String =
              s""" update ora_to_ch_query_log l
-                |   set l.end_local_copy = sysdate,
-                |       l.state    = 'finished'
+                |    set l.state    = 'finished'
                 | where l.id = $logId
                 | """.stripMargin
            val rs: ResultSet = sess.createStatement.executeQuery(query)
