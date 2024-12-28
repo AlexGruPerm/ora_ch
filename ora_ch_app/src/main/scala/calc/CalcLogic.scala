@@ -89,7 +89,8 @@ object CalcLogic {
   ): ZIO[ImplCalcRepo with jdbcChSession, Throwable, Unit] = for {
     fn <- ZIO.fiberId.map(_.threadName)
     _  <- ZIO.logInfo(s"fiber:$fn copyLocalCache (${meta.chSchema}) for queryLogId=$queryLogId")
-    ch <- ZIO.serviceWithZIO[jdbcChSession](_.getClickHousePool())
+    ch <- ZIO
+            .serviceWithZIO[jdbcChSession](_.getClickHousePool())
             .map(ds => chSess(ds.getConnection, 0))
     _  <- ora.saveBeginLocalCopying(queryLogId)
     _  <- ch.copyInLocalCache(meta)

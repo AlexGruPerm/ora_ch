@@ -39,6 +39,7 @@ object OraConnRepoImpl {
               connectionPool.setDriverClassName("oracle.jdbc.driver.OracleDriver")
               connectionPool.setUrl(dbUrl)
               connectionPool.setInitialSize(degree)
+              connectionPool.setFastFailValidation(true)
               connectionPool
             }.catchAll { case e: Exception =>
               ZIO.logError(e.getMessage) *>
