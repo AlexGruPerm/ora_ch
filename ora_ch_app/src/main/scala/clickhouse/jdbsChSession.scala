@@ -203,7 +203,7 @@ case class chSess(sess: Connection, taskId: Int) {
   /**
    * return count of copied rows.
    */
-  def getCountCopiedRows(table: Table): ZIO[Any, Nothing /*SQLException*/, Long] = for {
+  def getCountCopiedRows(table: Table): ZIO[Any, Nothing, Long] = for {
     rows <- ZIO.attempt {
               val rsRowCount = sess
                 .createStatement
@@ -217,8 +217,6 @@ case class chSess(sess: Connection, taskId: Int) {
             }.tapError(er => ZIO.logError(s"ERROR - getCountCopiedRows : ${er.getMessage}"))
               .tapDefect(df => ZIO.logError(s"DEFECT - getCountCopiedRows : ${df.toString}")) orElse
               ZIO.succeed(0L)
-    // .refineToOrDie[SQLException]
-    // .refineToOrDie[SQLException] orElse ZIO.succeed(0L)
   } yield rows
 
   def deleteRowsFromChTable(table: Table): ZIO[Any, SQLException, Unit] = for {
@@ -306,7 +304,7 @@ case class chSess(sess: Connection, taskId: Int) {
                   rsRowCnt.next()
                   val rowCount = rsRowCnt.getLong(1)
                   rsRowCnt.close()
-                  println(s"recreateTableCopyData INSERTED debug rowCount = $rowCount")
+                  println(s"recreateTableCopyData INSERTED debug rowCount = $rowCount for ${table.schema}.${table.name}")
                   rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
                 }.refineToOrDie[SQLException]
       finish <- Clock.currentTime(TimeUnit.MILLISECONDS)

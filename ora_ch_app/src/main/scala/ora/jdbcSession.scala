@@ -592,7 +592,7 @@ case class oraSessTask(sess: Connection, taskId: Int) extends oraSess {
   def setTableCopied(table: Table, rowCount: Long): ZIO[Any, SQLException, Unit] =
     for {
       taskId <- getTaskIdFromSess
-      _      <- ZIO.logInfo(s"setTableCopied debug ora sid = ${getPid}")
+      _      <- ZIO.logInfo(s"setTableCopied debug ora sid = $getPid rowCount=$rowCount")
       _      <- ZIO.attemptBlockingInterrupt {
                   val query: String =
                     s""" update ora_to_ch_tasks_tables t

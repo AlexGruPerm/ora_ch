@@ -103,14 +103,12 @@ object TaskLogic {
     chSession: chSess,
     maxValCnt: Option[MaxValAndCnt]
   ): ZIO[Any, Exception, Long] = for {
-    // start      <- Clock.currentTime(TimeUnit.MILLISECONDS)
     copiedRows <- chSession.getCountCopiedRows(table)
     rowCount   <- oraSession.updateCountCopiedRows(
                     table,
                     copiedRows - maxValCnt.map(_.CntRows).getOrElse(0L),
                     "COPY"
                   )
-    // finish     <- Clock.currentTime(TimeUnit.MILLISECONDS)
   } yield rowCount
 
   private def saveError(
@@ -171,8 +169,9 @@ object TaskLogic {
     fetch_size: Int,
     batch_size: Int
   ): ZIO[ImplTaskRepo, Throwable, Long] = for {
+    pfn <- ZIO.fiberId.map(_.threadName)
     _            <- ZIO.logInfo(
-                      s"Begin copyTableEffect for ${table.name} [${table.recreate}][${table.operation}]"
+                      s"Begin fiber=[$pfn] copyTableEffect for ${table.name} [${table.recreate}][${table.operation}]"
                     )
     _            <- oraSession.setTableBeginCopy(table)
     updateSessSid = oraSession.getPid
@@ -198,8 +197,8 @@ object TaskLogic {
                     .delay(5.second)
                     .repeat(Schedule.spaced(5.second))
                     .onInterrupt(
-                      debugInterruption("updatedCopiedRowsCount")
-                    ) // todo: remove .onInterrupt(debugInterruption
+                      debugInterruption(s"updatedCopiedRowsCount[${table.name}]")
+                    )
 
     // todo: Take update of ora_to_ch_tasks_tables table from getDataResultSet !!!
     rowCountEff =
