@@ -48,7 +48,7 @@ object TaskLogic {
     updateStructsScripts <- oraSession.getUpdTblDictScripts(table)
 
     primaryKeyColumnsCh <- chUpdateSession.getPkColumns(table)
-    fiberUpdCnt          = updatedCopiedRowsCountFUpd(
+    fiberUpdCnt         <- updatedCopiedRowsCountFUpd(
                              table,
                              table.copy(name = updateMergeTreeTable),
                              oraSession,
@@ -58,6 +58,7 @@ object TaskLogic {
                              .onInterrupt(
                                debugInterruption("updatedCopiedRowsCountFUpd")
                              )
+                             .fork
     loadUpdDataEff       = chLoadSession
                              .prepareStructsForUpdate(
                                updateStructsScripts,
@@ -76,10 +77,13 @@ object TaskLogic {
                              }
                              .refineToOrDie[SQLException]
 
-    rowCount <- fiberUpdCnt.disconnect race loadUpdDataEff
+    rowCount <- loadUpdDataEff // fiberUpdCnt.disconnect race loadUpdDataEff
 
-    _ <- oraSession.setTableCopied(table, rowCount)
-    _ <- chLoadSession.updateMergeTree(table, primaryKeyColumnsCh)
+    status <- fiberUpdCnt.status
+    _      <- ZIO.succeed(println(s"fiberUpdCnt status: $status"))
+    _      <- oraSession.setTableCopied(table, rowCount)
+    _      <- fiberUpdCnt.interrupt
+    _      <- chLoadSession.updateMergeTree(table, primaryKeyColumnsCh)
 
     _ <- oraSession
            .clearOraTable(table.clr_ora_table_aft_upd.getOrElse("xxx.yyy"))
@@ -169,10 +173,11 @@ object TaskLogic {
     fetch_size: Int,
     batch_size: Int
   ): ZIO[ImplTaskRepo, Throwable, Long] = for {
-    pfn <- ZIO.fiberId.map(_.threadName)
-    _            <- ZIO.logInfo(
-                      s"Begin fiber=[$pfn] copyTableEffect for ${table.name} [${table.recreate}][${table.operation}]"
-                    )
+    pfn          <- ZIO.fiberId.map(_.threadName)
+    _            <-
+      ZIO.logInfo(
+        s"Begin fiber=[$pfn] copyTableEffect for ${table.name} [${table.recreate}][${table.operation}]"
+      )
     _            <- oraSession.setTableBeginCopy(table)
     updateSessSid = oraSession.getPid
     _            <- ZIO.logInfo(s"For table ${table.name} update ora SID = $updateSessSid")
@@ -193,15 +198,16 @@ object TaskLogic {
         s"syncColMax = ${table.sync_by_column_max} syncUpdateColMax = ${table.sync_update_by_column_max}"
       )
 
-    fiberUpdCnt = updatedCopiedRowsCount(table, oraSession, chUpdateSession, maxValAndCnt)
-                    .delay(5.second)
-                    .repeat(Schedule.spaced(5.second))
-                    .onInterrupt(
-                      debugInterruption(s"updatedCopiedRowsCount[${table.name}]")
-                    )
+    fiberUpdCnt <- updatedCopiedRowsCount(table, oraSession, chUpdateSession, maxValAndCnt)
+                     .delay(5.second)
+                     .repeat(Schedule.spaced(5.second))
+                     .onInterrupt(
+                       debugInterruption(s"updatedCopiedRowsCount[${table.name}]")
+                     )
+                     .fork
 
     // todo: Take update of ora_to_ch_tasks_tables table from getDataResultSet !!!
-    rowCountEff =
+    rowCountEff  =
       chLoadSession
         .recreateTableCopyData(
           table,
@@ -221,9 +227,12 @@ object TaskLogic {
         }
         .refineToOrDie[SQLException]
 
-    rowCount <- fiberUpdCnt.disconnect race rowCountEff
+    rowCount <- rowCountEff // fiberUpdCnt.disconnect race rowCountEff
     _        <- ZIO.logInfo(s"RACE result rowCount = $rowCount")
+    status   <- fiberUpdCnt.status
+    _        <- ZIO.succeed(println(s"fiberUpdCnt status: $status"))
     _        <- oraSession.setTableCopied(table, rowCount)
+    _        <- fiberUpdCnt.interrupt
     finish   <- Clock.currentTime(TimeUnit.MILLISECONDS)
     _        <-
       ZIO.logInfo(
