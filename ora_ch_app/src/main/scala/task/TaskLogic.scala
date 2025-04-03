@@ -314,7 +314,14 @@ object TaskLogic {
                                      // todo: Explicitly interrupt internal effect inside, before closing session.
                                    }
                                }
-
+    chSessionUpdate          = chSess(
+                                 chPool.getConnection,
+                                 taskId
+                               )
+    chSessionLoad            = chSess(
+                                 chPool.getConnection,
+                                 taskId
+                               )
     // Only Updates
     operationsUpdates        = task.tables.filter(_.operation == Update).map { table =>
                                  ZIO.logInfo(
@@ -322,19 +329,12 @@ object TaskLogic {
                                  ) *> oraSess.sessTask(Some(taskId)).flatMap { s =>
                                    (
                                      table.operation match {
-                                       case Update =>
-                                         // updateTableColumns - for update whole table (all rows).
+                                       case Update => // updateTableColumns - for update whole table (all rows).
                                          updateWithTableDict(
-                                           chSess(
-                                             chPool.getConnection,
-                                             taskId
-                                           ), // ch connect for update
+                                           chSessionUpdate, // ch connect for update
                                            task.id,
                                            s,
-                                           chSess(
-                                             chPool.getConnection,
-                                             taskId
-                                           ), // ch connect for load data
+                                           chSessionLoad,   // ch connect for load data
                                            table,
                                            fetch_size,
                                            batch_size

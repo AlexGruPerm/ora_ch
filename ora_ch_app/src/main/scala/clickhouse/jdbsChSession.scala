@@ -304,7 +304,9 @@ case class chSess(sess: Connection, taskId: Int) {
                   rsRowCnt.next()
                   val rowCount = rsRowCnt.getLong(1)
                   rsRowCnt.close()
-                  println(s"recreateTableCopyData INSERTED debug rowCount = $rowCount for ${table.schema}.${table.name}")
+                  println(
+                    s"recreateTableCopyData INSERTED debug rowCount = $rowCount for ${table.schema}.${table.name}"
+                  )
                   rowCount - maxValCnt.map(_.CntRows).getOrElse(0L)
                 }.refineToOrDie[SQLException]
       finish <- Clock.currentTime(TimeUnit.MILLISECONDS)

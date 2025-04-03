@@ -199,7 +199,12 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
   def getQueryMeta(queryId: Int): ZIO[Any, SQLException, ViewQueryMeta] = for {
     queryMeta <- ZIO.attemptBlockingInterrupt {
                    val queryVq                 =
-                     s""" select vq.ch_table,vq.ora_table,vq.query_text,vq.ch_schema,vq.ora_schema,vq.copy_ch_ora_columns
+                     s""" select vq.ch_table,
+                        |        vq.ora_table,
+                        |        replace(vq.query_text,'pd_x_table',vq.replace_pd_x_table_to) as query_text,
+                        |        vq.ch_schema,
+                        |        vq.ora_schema,
+                        |        vq.copy_ch_ora_columns
                         |  from ora_to_ch_query vq
                         | where vq.id = $queryId """.stripMargin
                    val rsVq: ResultSet         = sess.createStatement.executeQuery(queryVq)
