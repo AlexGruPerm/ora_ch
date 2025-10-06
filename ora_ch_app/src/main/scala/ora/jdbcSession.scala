@@ -201,7 +201,11 @@ case class oraSessCalc(sess: Connection, calcId: Int) extends oraSess {
                    val queryVq                 =
                      s""" select vq.ch_table,
                         |        vq.ora_table,
-                        |        replace(vq.query_text,'pd_x_table',vq.replace_pd_x_table_to) as query_text,
+                        |        (case
+                        |          when vq.replace_pd_x_table_to is not null
+                        |          then replace(vq.query_text,'pd_x_table',vq.replace_pd_x_table_to)
+                        |          else vq.query_text
+                        |         end) as query_text,
                         |        vq.ch_schema,
                         |        vq.ora_schema,
                         |        vq.copy_ch_ora_columns
